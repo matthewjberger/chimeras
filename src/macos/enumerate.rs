@@ -100,7 +100,10 @@ pub(super) fn discovery_session() -> Retained<AVCaptureDeviceDiscoverySession> {
 
 fn device_to_public(device: &AVCaptureDevice) -> Device {
     let unique_id = unsafe { device.uniqueID() };
-    let name = unsafe { device.localizedName() };
+    let localized = unsafe { device.localizedName() }.to_string();
+    let manufacturer = unsafe { device.manufacturer() }.to_string();
+    let model = unsafe { device.modelID() }.to_string();
+    let name = compose_device_name(&manufacturer, &model, &localized);
     let raw_position = unsafe { device.position() };
     let position = if raw_position == AVCaptureDevicePosition::Front {
         Position::Front
@@ -112,10 +115,57 @@ fn device_to_public(device: &AVCaptureDevice) -> Device {
     let transport = transport_from_code(unsafe { device.transportType() });
     Device {
         id: DeviceId(unique_id.to_string()),
-        name: name.to_string(),
+        name,
         position,
         transport,
     }
+}
+
+fn compose_device_name(manufacturer: &str, model: &str, localized: &str) -> String {
+    let manufacturer = normalize_vendor_fragment(manufacturer);
+    let model = normalize_model_fragment(model);
+    let localized_lower = localized.to_lowercase();
+
+    let mut parts: Vec<&str> = Vec::new();
+    if !manufacturer.is_empty()
+        && !fragment_already_present(&manufacturer, &localized_lower)
+        && !fragment_already_present(&manufacturer, &model.to_lowercase())
+    {
+        parts.push(manufacturer.as_str());
+    }
+    if !model.is_empty() && !fragment_already_present(&model, &localized_lower) {
+        parts.push(model.as_str());
+    }
+    parts.push(localized);
+
+    let assembled = parts.join(" ");
+    if assembled.trim().is_empty() {
+        localized.to_string()
+    } else {
+        assembled
+    }
+}
+
+fn normalize_vendor_fragment(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches(|c: char| c == '.' || c == ',')
+        .trim()
+        .to_string()
+}
+
+fn normalize_model_fragment(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains("VendorID") || trimmed.contains("ProductID") {
+        return String::new();
+    }
+    trimmed.to_string()
+}
+
+fn fragment_already_present(fragment: &str, haystack_lower: &str) -> bool {
+    let first_token = fragment.to_lowercase();
+    let first_token = first_token.split_whitespace().next().unwrap_or("");
+    !first_token.is_empty() && haystack_lower.contains(first_token)
 }
 
 fn transport_from_code(code: i32) -> Transport {
