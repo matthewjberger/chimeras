@@ -108,10 +108,10 @@ The `demo/` app can view RTSP streams on macOS and Windows. To exercise the full
 
 ```bash
 # terminal 1: start mediamtx with the repo's mediamtx.yml
-just rtsp-server
+just rtsp-host
 
 # terminal 2: publish an MP4 file as an RTSP stream on rtsp://127.0.0.1:8554/live
-just serve-rtsp-stream path/to/some.mp4
+just rtsp-publish path/to/some.mp4
 
 # terminal 3: launch the demo app
 just run

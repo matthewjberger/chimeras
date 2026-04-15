@@ -67,27 +67,44 @@ pub fn open_rtsp(
     let worker = std::thread::Builder::new()
         .name("chimeras-rtsp".into())
         .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    let _ = ready_tx.send(Err(Error::Backend {
-                        platform: "rtsp",
-                        message: format!("tokio runtime: {error}"),
-                    }));
-                    return;
-                }
-            };
-            runtime.block_on(run_session(
-                parsed,
-                credentials,
-                requested,
-                frame_tx,
-                ready_tx,
-                shutdown_for_worker,
-            ));
+            let ready_tx_for_panic = ready_tx.clone();
+            let frame_tx_for_panic = frame_tx.clone();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(Error::Backend {
+                            platform: "rtsp",
+                            message: format!("tokio runtime: {error}"),
+                        }));
+                        return;
+                    }
+                };
+                runtime.block_on(run_session(
+                    parsed,
+                    credentials,
+                    requested,
+                    frame_tx,
+                    ready_tx,
+                    shutdown_for_worker,
+                ));
+            }));
+            if let Err(payload) = result {
+                let message = payload
+                    .downcast_ref::<&'static str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "rtsp worker panicked".into());
+                let error = Error::Backend {
+                    platform: "rtsp",
+                    message,
+                };
+                let _ = ready_tx_for_panic.try_send(Err(error.clone()));
+                let _ = frame_tx_for_panic.try_send(Err(error));
+            }
         })
         .map_err(|error| Error::Backend {
             platform: "rtsp",
@@ -215,6 +232,7 @@ async fn run_session(
 
     let mut current_resolution = applied.resolution;
     let mut current_framerate = applied.framerate;
+    let mut seen_keyframe = false;
 
     while !shutdown.load(Ordering::Relaxed) {
         let next = tokio::time::timeout(Duration::from_millis(500), demuxed.next()).await;
@@ -241,6 +259,13 @@ async fn run_session(
         {
             current_resolution = new_res;
             current_framerate = new_fps;
+        }
+
+        if decoder.is_some() && !seen_keyframe {
+            if !video.is_random_access_point() {
+                continue;
+            }
+            seen_keyframe = true;
         }
 
         let quality = if video.loss() > 0 {

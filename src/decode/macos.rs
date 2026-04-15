@@ -1,32 +1,33 @@
 //! macOS VideoToolbox hardware H.264 / H.265 decoder.
 //!
 //! Builds a `CMFormatDescription` from the RTSP SDP extradata (AVCC for H.264,
-//! HVCC for H.265), creates a `VTDecompressionSession` configured to output BGRA,
-//! and feeds NAL units as `CMSampleBuffer`s. Decoded `CVPixelBuffer`s are pulled
-//! out of the async output callback via an internal mutex-guarded queue and
-//! returned as [`Frame`]s on the next call to `decode`.
+//! HVCC for H.265), creates a `VTDecompressionSession`, and feeds NAL units
+//! as `CMSampleBuffer`s. Decoded `CVPixelBuffer`s are pulled out of the async
+//! output callback via an internal mutex-guarded queue and returned as NV12
+//! [`Frame`]s (Y in `plane_primary`, UV in `plane_secondary`) matching the
+//! Windows backend so the demo's GPU conversion path is identical on both.
 
 use super::{VideoCodec, VideoDecoder};
 use crate::error::Error;
 use crate::types::{Frame, FrameQuality, PixelFormat};
 use bytes::Bytes;
 use objc2::rc::Retained;
+use objc2_core_foundation::{CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, CFType};
 use objc2_core_media::{
-    CMBlockBuffer, CMBlockBufferCreateWithMemoryBlock, CMFormatDescription, CMSampleBuffer,
-    CMSampleBufferCreate, CMSampleTimingInfo, CMTime, CMTimeFlags,
+    CMBlockBuffer, CMFormatDescription, CMSampleBuffer, CMSampleTimingInfo, CMTime, CMTimeFlags,
     CMVideoFormatDescriptionCreateFromH264ParameterSets,
     CMVideoFormatDescriptionCreateFromHEVCParameterSets, kCMTimeInvalid,
 };
 use objc2_core_video::{
-    CVImageBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
-    CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
+    CVImageBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBaseAddressOfPlane,
+    CVPixelBufferGetBytesPerRow, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight,
+    CVPixelBufferGetHeightOfPlane, CVPixelBufferGetPlaneCount, CVPixelBufferGetWidth,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
-    kCVPixelFormatType_32BGRA,
+    kCVPixelBufferPixelFormatTypeKey,
 };
 use objc2_video_toolbox::{
     VTDecodeFrameFlags, VTDecodeInfoFlags, VTDecompressionOutputCallbackRecord,
-    VTDecompressionSession, VTDecompressionSessionCreate, VTDecompressionSessionDecodeFrame,
-    VTDecompressionSessionInvalidate,
+    VTDecompressionSession,
 };
 use std::os::raw::c_void;
 use std::ptr::NonNull;
@@ -50,6 +51,40 @@ struct OutputQueue {
     error: Option<Error>,
 }
 
+fn build_destination_attributes() -> Option<CFRetained<CFDictionary>> {
+    // NV12 biplanar video range: 'y420' -> kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+    let pixel_format: i32 = 0x34323076;
+    let number = unsafe {
+        CFNumber::new(
+            None,
+            CFNumberType::SInt32Type,
+            &pixel_format as *const i32 as *const c_void,
+        )
+    }?;
+    let number_ref: &CFType = (&*number).as_ref();
+    let key_ref: &CFString = unsafe { kCVPixelBufferPixelFormatTypeKey };
+    let typed: CFRetained<CFDictionary<CFString, CFType>> =
+        CFDictionary::from_slices(&[key_ref], &[number_ref]);
+    Some(unsafe { CFRetained::cast_unchecked(typed) })
+}
+
+fn catch_ns<R>(
+    label: &'static str,
+    closure: impl FnOnce() -> R + std::panic::UnwindSafe,
+) -> Result<R, Error> {
+    match objc2::exception::catch(closure) {
+        Ok(value) => Ok(value),
+        Err(None) => Err(Error::Backend {
+            platform: "macos",
+            message: format!("{label}: unknown NSException"),
+        }),
+        Err(Some(exception)) => Err(Error::Backend {
+            platform: "macos",
+            message: format!("{label}: {exception:?}"),
+        }),
+    }
+}
+
 impl VideoDecoder for VideoToolboxDecoder {
     fn new(codec: VideoCodec, extradata: &[u8]) -> Result<Self, Error> {
         let format_desc = build_format_description(codec, extradata)?;
@@ -60,16 +95,33 @@ impl VideoDecoder for VideoToolboxDecoder {
             decompressionOutputRefCon: Arc::into_raw(Arc::clone(&output)) as *mut c_void,
         };
 
+        let destination_attrs = build_destination_attributes();
+        let destination_attrs_ref = destination_attrs.as_deref();
+
         let mut raw_session: *mut VTDecompressionSession = std::ptr::null_mut();
-        let status = unsafe {
-            VTDecompressionSessionCreate(
-                None,
-                &format_desc,
-                None,
-                None,
-                &callback,
-                NonNull::from(&mut raw_session),
-            )
+        let status = catch_ns(
+            "VTDecompressionSession::create",
+            std::panic::AssertUnwindSafe(|| unsafe {
+                VTDecompressionSession::create(
+                    None,
+                    &format_desc,
+                    None,
+                    destination_attrs_ref,
+                    &callback,
+                    NonNull::from(&mut raw_session),
+                )
+            }),
+        );
+        let status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                unsafe {
+                    drop(Arc::from_raw(
+                        callback.decompressionOutputRefCon as *const Mutex<OutputQueue>,
+                    ));
+                }
+                return Err(error);
+            }
         };
         if status != 0 || raw_session.is_null() {
             unsafe {
@@ -99,21 +151,28 @@ impl VideoDecoder for VideoToolboxDecoder {
         let block = create_block_buffer(nal)?;
         let sample = create_sample_buffer(&block, &self.format_desc, timestamp)?;
         let mut info_flags = VTDecodeInfoFlags::empty();
-        let status = unsafe {
-            VTDecompressionSessionDecodeFrame(
-                &self.session,
-                &sample,
-                VTDecodeFrameFlags::empty(),
-                std::ptr::null_mut(),
-                &mut info_flags,
-            )
-        };
+        let status = catch_ns(
+            "VTDecompressionSession::decode_frame",
+            std::panic::AssertUnwindSafe(|| unsafe {
+                self.session.decode_frame(
+                    &sample,
+                    VTDecodeFrameFlags::empty(),
+                    std::ptr::null_mut(),
+                    &mut info_flags,
+                )
+            }),
+        )?;
         if status != 0 {
             return Err(Error::Backend {
                 platform: "macos",
                 message: format!("VTDecompressionSessionDecodeFrame failed: {status}"),
             });
         }
+
+        let _ = catch_ns(
+            "VTDecompressionSession::wait_for_asynchronous_frames",
+            std::panic::AssertUnwindSafe(|| unsafe { self.session.wait_for_asynchronous_frames() }),
+        );
 
         let mut guard = self.output.lock().map_err(|_| Error::Backend {
             platform: "macos",
@@ -128,7 +187,7 @@ impl VideoDecoder for VideoToolboxDecoder {
 
 impl Drop for VideoToolboxDecoder {
     fn drop(&mut self) {
-        unsafe { VTDecompressionSessionInvalidate(&self.session) };
+        unsafe { self.session.invalidate() };
     }
 }
 
@@ -141,24 +200,27 @@ unsafe extern "C-unwind" fn output_callback(
     _presentation_timestamp: CMTime,
     _presentation_duration: CMTime,
 ) {
-    if refcon.is_null() {
-        return;
-    }
-    let output = unsafe { &*(refcon as *const Mutex<OutputQueue>) };
-    let Ok(mut guard) = output.lock() else { return };
-    if status != 0 || image_buffer.is_null() {
-        if guard.error.is_none() {
-            guard.error = Some(Error::Backend {
-                platform: "macos",
-                message: format!("VideoToolbox decode callback status: {status}"),
-            });
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if refcon.is_null() {
+            return;
         }
-        return;
-    }
-    let pixel_buffer = unsafe { &*(image_buffer as *const CVPixelBuffer) };
-    if let Some(frame) = pixel_buffer_to_frame(pixel_buffer) {
-        guard.frames.push(frame);
-    }
+        let output = unsafe { &*(refcon as *const Mutex<OutputQueue>) };
+        let Ok(mut guard) = output.lock() else { return };
+        if status != 0 || image_buffer.is_null() {
+            if guard.error.is_none() {
+                guard.error = Some(Error::Backend {
+                    platform: "macos",
+                    message: format!("VideoToolbox decode callback status: {status}"),
+                });
+            }
+            return;
+        }
+        let pixel_buffer = unsafe { &*(image_buffer as *const CVPixelBuffer) };
+        if let Some(frame) = pixel_buffer_to_frame(pixel_buffer) {
+            guard.frames.push(frame);
+        }
+    }));
+    let _ = result;
 }
 
 fn pixel_buffer_to_frame(pb: &CVPixelBuffer) -> Option<Frame> {
@@ -168,11 +230,11 @@ fn pixel_buffer_to_frame(pb: &CVPixelBuffer) -> Option<Frame> {
 
     let width = CVPixelBufferGetWidth(pb) as u32;
     let height = CVPixelBufferGetHeight(pb) as u32;
-    let format_code = CVPixelBufferGetPixelFormatType(pb);
-    let result = if format_code == kCVPixelFormatType_32BGRA {
-        copy_single_plane_frame(pb, width, height, PixelFormat::Bgra8)
+    let plane_count = unsafe { CVPixelBufferGetPlaneCount(pb) };
+    let result = if plane_count >= 2 {
+        copy_biplanar_nv12(pb, width, height)
     } else {
-        copy_nv12_frame(pb, width, height)
+        copy_single_plane_bgra(pb, width, height)
     };
 
     unsafe {
@@ -181,51 +243,55 @@ fn pixel_buffer_to_frame(pb: &CVPixelBuffer) -> Option<Frame> {
     result
 }
 
-fn copy_single_plane_frame(
-    pb: &CVPixelBuffer,
-    width: u32,
-    height: u32,
-    pixel_format: PixelFormat,
-) -> Option<Frame> {
-    let stride = CVPixelBufferGetBytesPerRow(pb) as u32;
-    let base = CVPixelBufferGetBaseAddress(pb);
-    if base.is_null() {
+fn copy_biplanar_nv12(pb: &CVPixelBuffer, width: u32, height: u32) -> Option<Frame> {
+    let y_stride = unsafe { CVPixelBufferGetBytesPerRowOfPlane(pb, 0) };
+    let y_rows = unsafe { CVPixelBufferGetHeightOfPlane(pb, 0) };
+    let uv_stride = unsafe { CVPixelBufferGetBytesPerRowOfPlane(pb, 1) };
+    let uv_rows = unsafe { CVPixelBufferGetHeightOfPlane(pb, 1) };
+    let y_base = unsafe { CVPixelBufferGetBaseAddressOfPlane(pb, 0) };
+    let uv_base = unsafe { CVPixelBufferGetBaseAddressOfPlane(pb, 1) };
+    if y_base.is_null() || uv_base.is_null() || y_stride == 0 || y_stride != uv_stride {
         return None;
     }
-    let byte_count = stride as usize * height as usize;
+    let y_len = y_stride.saturating_mul(y_rows);
+    let uv_len = uv_stride.saturating_mul(uv_rows);
+    if y_len == 0 || uv_len == 0 {
+        return None;
+    }
+    let y_data = unsafe { std::slice::from_raw_parts(y_base as *const u8, y_len) }.to_vec();
+    let uv_data = unsafe { std::slice::from_raw_parts(uv_base as *const u8, uv_len) }.to_vec();
+    Some(Frame {
+        width,
+        height,
+        stride: y_stride as u32,
+        timestamp: Duration::ZERO,
+        pixel_format: PixelFormat::Nv12,
+        quality: FrameQuality::Intact,
+        plane_primary: Bytes::from(y_data),
+        plane_secondary: Bytes::from(uv_data),
+    })
+}
+
+fn copy_single_plane_bgra(pb: &CVPixelBuffer, width: u32, height: u32) -> Option<Frame> {
+    let stride = unsafe { CVPixelBufferGetBytesPerRow(pb) };
+    let base = unsafe { CVPixelBufferGetBaseAddress(pb) };
+    if base.is_null() || stride == 0 || height == 0 {
+        return None;
+    }
+    let byte_count = stride.saturating_mul(height as usize);
+    if byte_count == 0 {
+        return None;
+    }
     let data = unsafe { std::slice::from_raw_parts(base as *const u8, byte_count) }.to_vec();
     Some(Frame {
         width,
         height,
-        stride,
+        stride: stride as u32,
         timestamp: Duration::ZERO,
-        pixel_format,
+        pixel_format: PixelFormat::Bgra8,
         quality: FrameQuality::Intact,
         plane_primary: Bytes::from(data),
         plane_secondary: Bytes::new(),
-    })
-}
-
-fn copy_nv12_frame(pb: &CVPixelBuffer, width: u32, height: u32) -> Option<Frame> {
-    let stride = CVPixelBufferGetBytesPerRow(pb) as u32;
-    let base = CVPixelBufferGetBaseAddress(pb);
-    if base.is_null() {
-        return None;
-    }
-    let y_size = stride as usize * height as usize;
-    let uv_size = stride as usize * (height as usize / 2);
-    let total = y_size + uv_size;
-    let slice = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
-    let (y_plane, uv_plane) = slice.split_at(y_size);
-    Some(Frame {
-        width,
-        height,
-        stride,
-        timestamp: Duration::ZERO,
-        pixel_format: PixelFormat::Nv12,
-        quality: FrameQuality::Intact,
-        plane_primary: Bytes::copy_from_slice(y_plane),
-        plane_secondary: Bytes::copy_from_slice(uv_plane),
     })
 }
 
@@ -258,27 +324,30 @@ fn build_format_description(
     })?;
 
     let mut format_desc: *const CMFormatDescription = std::ptr::null();
-    let status = unsafe {
-        match codec {
-            VideoCodec::H264 => CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                None,
-                pointers.len(),
-                pointers_nn,
-                sizes_nn,
-                NAL_LENGTH_SIZE,
-                NonNull::from(&mut format_desc),
-            ),
-            VideoCodec::H265 => CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-                None,
-                pointers.len(),
-                pointers_nn,
-                sizes_nn,
-                NAL_LENGTH_SIZE,
-                None,
-                NonNull::from(&mut format_desc),
-            ),
-        }
-    };
+    let status = catch_ns(
+        "CMVideoFormatDescriptionCreate",
+        std::panic::AssertUnwindSafe(|| unsafe {
+            match codec {
+                VideoCodec::H264 => CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    None,
+                    pointers.len(),
+                    pointers_nn,
+                    sizes_nn,
+                    NAL_LENGTH_SIZE,
+                    NonNull::from(&mut format_desc),
+                ),
+                VideoCodec::H265 => CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                    None,
+                    pointers.len(),
+                    pointers_nn,
+                    sizes_nn,
+                    NAL_LENGTH_SIZE,
+                    None,
+                    NonNull::from(&mut format_desc),
+                ),
+            }
+        }),
+    )?;
     if status != 0 || format_desc.is_null() {
         return Err(Error::Backend {
             platform: "macos",
@@ -387,29 +456,49 @@ fn parse_hvcc(data: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<usize>), Error> {
 
 fn create_block_buffer(nal: &[u8]) -> Result<Retained<CMBlockBuffer>, Error> {
     let mut raw: *mut CMBlockBuffer = std::ptr::null_mut();
-    let status = unsafe {
-        CMBlockBufferCreateWithMemoryBlock(
-            None,
-            nal.as_ptr() as *mut c_void,
-            nal.len(),
-            None,
-            std::ptr::null(),
-            0,
-            nal.len(),
-            0,
-            NonNull::from(&mut raw),
-        )
-    };
+    let status = catch_ns(
+        "CMBlockBuffer::create_with_memory_block",
+        std::panic::AssertUnwindSafe(|| unsafe {
+            CMBlockBuffer::create_with_memory_block(
+                None,
+                std::ptr::null_mut(),
+                nal.len(),
+                None,
+                std::ptr::null(),
+                0,
+                nal.len(),
+                1,
+                NonNull::from(&mut raw),
+            )
+        }),
+    )?;
     if status != 0 || raw.is_null() {
         return Err(Error::Backend {
             platform: "macos",
-            message: format!("CMBlockBufferCreateWithMemoryBlock failed: {status}"),
+            message: format!("CMBlockBuffer::create_with_memory_block failed: {status}"),
         });
     }
-    unsafe { Retained::from_raw(raw) }.ok_or(Error::Backend {
+    let buffer = unsafe { Retained::from_raw(raw) }.ok_or(Error::Backend {
         platform: "macos",
         message: "block buffer null".into(),
-    })
+    })?;
+    let source = NonNull::new(nal.as_ptr() as *mut c_void).ok_or(Error::Backend {
+        platform: "macos",
+        message: "empty NAL buffer".into(),
+    })?;
+    let status = catch_ns(
+        "CMBlockBuffer::replace_data_bytes",
+        std::panic::AssertUnwindSafe(|| unsafe {
+            CMBlockBuffer::replace_data_bytes(source, &buffer, 0, nal.len())
+        }),
+    )?;
+    if status != 0 {
+        return Err(Error::Backend {
+            platform: "macos",
+            message: format!("CMBlockBuffer::replace_data_bytes failed: {status}"),
+        });
+    }
+    Ok(buffer)
 }
 
 fn create_sample_buffer(
@@ -424,22 +513,25 @@ fn create_sample_buffer(
         presentationTimeStamp: duration_to_cmtime(timestamp),
         decodeTimeStamp: invalid,
     };
-    let status = unsafe {
-        CMSampleBufferCreate(
-            None,
-            Some(block),
-            true,
-            None,
-            std::ptr::null_mut(),
-            Some(format),
-            1,
-            1,
-            &timing,
-            0,
-            std::ptr::null(),
-            NonNull::from(&mut raw),
-        )
-    };
+    let status = catch_ns(
+        "CMSampleBuffer::create",
+        std::panic::AssertUnwindSafe(|| unsafe {
+            CMSampleBuffer::create(
+                None,
+                Some(block),
+                true,
+                None,
+                std::ptr::null_mut(),
+                Some(format),
+                1,
+                1,
+                &timing,
+                0,
+                std::ptr::null(),
+                NonNull::from(&mut raw),
+            )
+        }),
+    )?;
     if status != 0 || raw.is_null() {
         return Err(Error::Backend {
             platform: "macos",

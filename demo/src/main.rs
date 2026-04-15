@@ -1,16 +1,16 @@
+use bytes::Bytes;
 use chimeras::{Credentials, Device, Frame, PixelFormat, Resolution, StreamConfig};
-use dioxus::desktop::wry::http::Response as HttpResponse;
 use dioxus::prelude::*;
 use image::ImageEncoder;
 use image::codecs::png::PngEncoder;
-use std::borrow::Cow;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const APP_CSS: &str = include_str!("../assets/app.css");
 const PREVIEW_JS: &str = include_str!("../assets/preview.js");
-const PROTOCOL: &str = "chimeras";
 
 const PREVIEW_MAGIC: [u8; 4] = *b"CHIM";
 const PREVIEW_VERSION: u8 = 1;
@@ -20,31 +20,147 @@ const PREVIEW_FORMAT_BGRA: u8 = 2;
 const PREVIEW_FORMAT_RGBA: u8 = 3;
 const PREVIEW_HEADER_LEN: usize = 24;
 
-#[cfg(any(target_os = "windows", target_os = "android"))]
-const PREVIEW_FETCH_URL: &str = "http://chimeras.localhost/preview.bin";
-
-#[cfg(not(any(target_os = "windows", target_os = "android")))]
-const PREVIEW_FETCH_URL: &str = "chimeras://localhost/preview.bin";
-
 fn main() {
     let latest_frame = LatestFrame::new();
-    let latest_for_protocol = latest_frame.clone();
+    let latest_for_server = latest_frame.clone();
+    let preview_url =
+        start_preview_server(latest_for_server).expect("failed to start preview server");
 
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
-            dioxus::desktop::Config::new()
-                .with_menu(None)
-                .with_custom_protocol(PROTOCOL.to_string(), move |_id, _request| {
-                    serve_frame(&latest_for_protocol)
-                })
-                .with_window(
-                    dioxus::desktop::WindowBuilder::new()
-                        .with_title("chimeras demo")
-                        .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0)),
-                ),
+            dioxus::desktop::Config::new().with_menu(None).with_window(
+                dioxus::desktop::WindowBuilder::new()
+                    .with_title("chimeras demo")
+                    .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0)),
+            ),
         )
         .with_context(latest_frame)
+        .with_context(PreviewUrl(preview_url))
         .launch(App);
+}
+
+#[derive(Clone)]
+struct PreviewUrl(String);
+
+fn start_preview_server(latest: LatestFrame) -> std::io::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:8565")?;
+    let port = listener.local_addr()?.port();
+    let url = format!("http://127.0.0.1:{port}/preview.bin");
+    std::thread::Builder::new()
+        .name("chimeras-preview-server".into())
+        .spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let latest = latest.clone();
+                let _ = std::thread::Builder::new()
+                    .name("chimeras-preview-conn".into())
+                    .spawn(move || {
+                        let _ = stream.set_nodelay(true);
+                        let _ = handle_preview_connection(stream, &latest);
+                    });
+            }
+        })?;
+    Ok(url)
+}
+
+fn handle_preview_connection(mut stream: TcpStream, latest: &LatestFrame) -> std::io::Result<()> {
+    let mut request_buf = [0u8; 2048];
+    loop {
+        let n = stream.read(&mut request_buf)?;
+        if n == 0 {
+            return Ok(());
+        }
+        write_preview_response(&mut stream, latest)?;
+    }
+}
+
+fn write_preview_response(stream: &mut TcpStream, latest: &LatestFrame) -> std::io::Result<()> {
+    let counter = latest.counter();
+    let snapshot = latest.snapshot();
+    let parts = match snapshot.as_ref() {
+        Some(frame) => preview_parts(frame, counter),
+        None => PreviewParts {
+            header: preview_header(PREVIEW_FORMAT_NONE, 0, 0, 0, counter),
+            primary: None,
+            secondary: None,
+        },
+    };
+    let total_body_len = parts.header.len()
+        + parts.primary.as_ref().map(|b| b.len()).unwrap_or(0)
+        + parts.secondary.as_ref().map(|b| b.len()).unwrap_or(0);
+    let http_header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nConnection: keep-alive\r\n\r\n",
+        total_body_len
+    );
+    stream.write_all(http_header.as_bytes())?;
+    stream.write_all(&parts.header)?;
+    if let Some(primary) = &parts.primary {
+        stream.write_all(primary)?;
+    }
+    if let Some(secondary) = &parts.secondary {
+        stream.write_all(secondary)?;
+    }
+    Ok(())
+}
+
+struct PreviewParts {
+    header: Vec<u8>,
+    primary: Option<Bytes>,
+    secondary: Option<Bytes>,
+}
+
+fn preview_parts(frame: &Frame, counter: u32) -> PreviewParts {
+    match frame.pixel_format {
+        PixelFormat::Nv12 => PreviewParts {
+            header: preview_header(
+                PREVIEW_FORMAT_NV12,
+                frame.width,
+                frame.height,
+                frame.stride,
+                counter,
+            ),
+            primary: Some(frame.plane_primary.clone()),
+            secondary: Some(frame.plane_secondary.clone()),
+        },
+        PixelFormat::Bgra8 => {
+            let stride = if frame.stride == 0 {
+                frame.width * 4
+            } else {
+                frame.stride
+            };
+            PreviewParts {
+                header: preview_header(
+                    PREVIEW_FORMAT_BGRA,
+                    frame.width,
+                    frame.height,
+                    stride,
+                    counter,
+                ),
+                primary: Some(frame.plane_primary.clone()),
+                secondary: None,
+            }
+        }
+        _ => {
+            let Ok(rgba) = chimeras::to_rgba8(frame) else {
+                return PreviewParts {
+                    header: preview_header(PREVIEW_FORMAT_NONE, 0, 0, 0, counter),
+                    primary: None,
+                    secondary: None,
+                };
+            };
+            let stride = frame.width * 4;
+            PreviewParts {
+                header: preview_header(
+                    PREVIEW_FORMAT_RGBA,
+                    frame.width,
+                    frame.height,
+                    stride,
+                    counter,
+                ),
+                primary: Some(Bytes::from(rgba)),
+                secondary: None,
+            }
+        }
+    }
 }
 
 struct Session {
@@ -97,23 +213,6 @@ impl LatestFrame {
     }
 }
 
-fn serve_frame(latest: &LatestFrame) -> HttpResponse<Cow<'static, [u8]>> {
-    let counter = latest.counter();
-    let body = match latest.snapshot() {
-        Some(frame) => encode_preview(&frame, counter),
-        None => preview_header(PREVIEW_FORMAT_NONE, 0, 0, 0, counter),
-    };
-    let len = body.len();
-    HttpResponse::builder()
-        .status(200)
-        .header("Content-Type", "application/octet-stream")
-        .header("Content-Length", len.to_string())
-        .header("Cache-Control", "no-store")
-        .header("Access-Control-Allow-Origin", "*")
-        .body(Cow::Owned(body))
-        .unwrap()
-}
-
 fn preview_header(format: u8, width: u32, height: u32, stride: u32, counter: u32) -> Vec<u8> {
     let mut header = Vec::with_capacity(PREVIEW_HEADER_LEN);
     header.extend_from_slice(&PREVIEW_MAGIC);
@@ -125,55 +224,6 @@ fn preview_header(format: u8, width: u32, height: u32, stride: u32, counter: u32
     header.extend_from_slice(&stride.to_le_bytes());
     header.extend_from_slice(&counter.to_le_bytes());
     header
-}
-
-fn encode_preview(frame: &Frame, counter: u32) -> Vec<u8> {
-    match frame.pixel_format {
-        PixelFormat::Nv12 => {
-            let mut out = preview_header(
-                PREVIEW_FORMAT_NV12,
-                frame.width,
-                frame.height,
-                frame.stride,
-                counter,
-            );
-            out.reserve(frame.plane_primary.len() + frame.plane_secondary.len());
-            out.extend_from_slice(&frame.plane_primary);
-            out.extend_from_slice(&frame.plane_secondary);
-            out
-        }
-        PixelFormat::Bgra8 => {
-            let stride = if frame.stride == 0 {
-                frame.width * 4
-            } else {
-                frame.stride
-            };
-            let mut out = preview_header(
-                PREVIEW_FORMAT_BGRA,
-                frame.width,
-                frame.height,
-                stride,
-                counter,
-            );
-            out.extend_from_slice(&frame.plane_primary);
-            out
-        }
-        _ => {
-            let Ok(rgba) = chimeras::to_rgba8(frame) else {
-                return preview_header(PREVIEW_FORMAT_NONE, 0, 0, 0, counter);
-            };
-            let stride = frame.width * 4;
-            let mut out = preview_header(
-                PREVIEW_FORMAT_RGBA,
-                frame.width,
-                frame.height,
-                stride,
-                counter,
-            );
-            out.extend_from_slice(&rgba);
-            out
-        }
-    }
 }
 
 fn refresh_devices(
@@ -217,6 +267,7 @@ fn App() -> Element {
     let rtsp_password = use_signal(String::new);
 
     let latest_frame = use_context::<LatestFrame>();
+    let preview_url = use_context::<PreviewUrl>().0;
 
     use_effect(move || {
         refresh_devices(devices, status, selected_index);
@@ -480,7 +531,7 @@ fn App() -> Element {
                     }
                 }
             }
-            script { dangerous_inner_html: "window.__chimerasPreviewUrl={PREVIEW_FETCH_URL:?};{PREVIEW_JS}" }
+            script { dangerous_inner_html: "window.__chimerasPreviewUrl={preview_url:?};{PREVIEW_JS}" }
 
             if let Some(path) = saved_path() {
                 section { class: "saved-note",

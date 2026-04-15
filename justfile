@@ -52,15 +52,16 @@ run-list:
 run-capture:
   cargo run -p chimeras --example capture
 
-# Run mediamtx in the foreground. Run this in one terminal, then
-# `just serve-rtsp-stream` in another. Requires mediamtx on PATH.
-rtsp-server:
+# Run mediamtx in the foreground to host rtsp://127.0.0.1:8554. Run this
+# in one terminal, then `just rtsp-publish PATH` in another to push an
+# MP4 into it. Requires mediamtx on PATH.
+rtsp-host:
   mediamtx
 
-# Publish an MP4 file to the local mediamtx as an RTSP stream at
-# rtsp://127.0.0.1:8554/live. Assumes `just rtsp-server` is running
-# in another terminal. Requires ffmpeg on PATH.
-serve-rtsp-stream args="test_video.mp4":
+# Publish a local MP4 file to the running mediamtx as an RTSP stream at
+# rtsp://127.0.0.1:8554/live. Assumes `just rtsp-host` is running in
+# another terminal. Requires ffmpeg on PATH.
+rtsp-publish args="test_video.mp4":
   ffmpeg -re -stream_loop -1 -i {{args}} -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 
 # Check for unused dependencies with cargo-machete

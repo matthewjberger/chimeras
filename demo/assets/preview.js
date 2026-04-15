@@ -26,9 +26,9 @@ void main() {
     vec2 uv = v_uv * u_crop;
     float y = texture(y_tex, uv).r;
     vec2 cbcr = texture(uv_tex, uv).rg;
-    float c = y - 0.0625;
     float cb = cbcr.r - 0.5;
     float cr = cbcr.g - 0.5;
+    float c = y - 0.0625;
     float r = clamp(1.164 * c + 1.596 * cr, 0.0, 1.0);
     float g = clamp(1.164 * c - 0.391 * cb - 0.813 * cr, 0.0, 1.0);
     float b = clamp(1.164 * c + 2.018 * cb, 0.0, 1.0);
@@ -107,6 +107,9 @@ void main() {
     let currentWidth = 0;
     let currentHeight = 0;
     let currentStride = 0;
+    let yTexDims = { w: 0, h: 0 };
+    let uvTexDims = { w: 0, h: 0 };
+    let packedTexDims = { w: 0, h: 0 };
 
     async function fetchAndUpload() {
         if (fetching) return;
@@ -148,46 +151,94 @@ void main() {
                 const uvBytes = payload.subarray(ySize, ySize + uvSize);
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, yTex);
-                gl.texImage2D(
-                    gl.TEXTURE_2D,
-                    0,
-                    gl.R8,
-                    stride,
-                    height,
-                    0,
-                    gl.RED,
-                    gl.UNSIGNED_BYTE,
-                    yBytes,
-                );
+                if (yTexDims.w !== stride || yTexDims.h !== height) {
+                    gl.texImage2D(
+                        gl.TEXTURE_2D,
+                        0,
+                        gl.R8,
+                        stride,
+                        height,
+                        0,
+                        gl.RED,
+                        gl.UNSIGNED_BYTE,
+                        yBytes,
+                    );
+                    yTexDims = { w: stride, h: height };
+                } else {
+                    gl.texSubImage2D(
+                        gl.TEXTURE_2D,
+                        0,
+                        0,
+                        0,
+                        stride,
+                        height,
+                        gl.RED,
+                        gl.UNSIGNED_BYTE,
+                        yBytes,
+                    );
+                }
+                const uvW = stride >> 1;
+                const uvH = height >> 1;
                 gl.activeTexture(gl.TEXTURE1);
                 gl.bindTexture(gl.TEXTURE_2D, uvTex);
-                gl.texImage2D(
-                    gl.TEXTURE_2D,
-                    0,
-                    gl.RG8,
-                    stride >> 1,
-                    height >> 1,
-                    0,
-                    gl.RG,
-                    gl.UNSIGNED_BYTE,
-                    uvBytes,
-                );
+                if (uvTexDims.w !== uvW || uvTexDims.h !== uvH) {
+                    gl.texImage2D(
+                        gl.TEXTURE_2D,
+                        0,
+                        gl.RG8,
+                        uvW,
+                        uvH,
+                        0,
+                        gl.RG,
+                        gl.UNSIGNED_BYTE,
+                        uvBytes,
+                    );
+                    uvTexDims = { w: uvW, h: uvH };
+                } else {
+                    gl.texSubImage2D(
+                        gl.TEXTURE_2D,
+                        0,
+                        0,
+                        0,
+                        uvW,
+                        uvH,
+                        gl.RG,
+                        gl.UNSIGNED_BYTE,
+                        uvBytes,
+                    );
+                }
             } else if (format === 2 || format === 3) {
                 const rowPixels = stride >> 2;
                 if (payload.byteLength < stride * height) return;
+                const slice = payload.subarray(0, stride * height);
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, packedTex);
-                gl.texImage2D(
-                    gl.TEXTURE_2D,
-                    0,
-                    gl.RGBA8,
-                    rowPixels,
-                    height,
-                    0,
-                    gl.RGBA,
-                    gl.UNSIGNED_BYTE,
-                    payload.subarray(0, stride * height),
-                );
+                if (packedTexDims.w !== rowPixels || packedTexDims.h !== height) {
+                    gl.texImage2D(
+                        gl.TEXTURE_2D,
+                        0,
+                        gl.RGBA8,
+                        rowPixels,
+                        height,
+                        0,
+                        gl.RGBA,
+                        gl.UNSIGNED_BYTE,
+                        slice,
+                    );
+                    packedTexDims = { w: rowPixels, h: height };
+                } else {
+                    gl.texSubImage2D(
+                        gl.TEXTURE_2D,
+                        0,
+                        0,
+                        0,
+                        rowPixels,
+                        height,
+                        gl.RGBA,
+                        gl.UNSIGNED_BYTE,
+                        slice,
+                    );
+                }
             }
         } catch (_) {
         } finally {
@@ -246,8 +297,13 @@ void main() {
         }
     }
 
+    let lastFetchStart = 0;
     function loop() {
-        fetchAndUpload();
+        const now = performance.now();
+        if (!fetching && now - lastFetchStart > 28) {
+            lastFetchStart = now;
+            fetchAndUpload();
+        }
         render();
         requestAnimationFrame(loop);
     }
