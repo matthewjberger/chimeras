@@ -1,0 +1,46 @@
+[workspace]
+members = ["demo"]
+
+[package]
+name = "chimeras"
+version = "0.1.0"
+authors = ["Matthew Berger <matthewjordanberger@gmail.com>"]
+edition = "2024"
+description = "A cross-platform camera library built with data-oriented design"
+homepage = "https://github.com/matthewjberger/chimeras"
+repository = "https://github.com/matthewjberger/chimeras"
+keywords = ["camera", "webcam", "video", "capture", "cross-platform"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bytes = "1"
+crossbeam-channel = "0.5"
+thiserror = "2"
+zune-jpeg = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", features = ["exception"] }
+objc2-foundation = "0.3"
+objc2-av-foundation = { version = "0.3", features = ["objc2-core-media"] }
+objc2-core-media = "0.3"
+objc2-core-video = "0.3"
+dispatch2 = "0.3"
+block2 = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Devices_Properties",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14"
+
+[[example]]
+name = "list"
+
+[[example]]
+name = "capture"
