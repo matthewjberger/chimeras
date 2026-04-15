@@ -1,23 +1,33 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use chimeras::{Device, Frame, PixelFormat, Resolution, StreamConfig};
+use dioxus::desktop::wry::http::Response as HttpResponse;
 use dioxus::prelude::*;
 use image::ImageEncoder;
 use image::codecs::png::PngEncoder;
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const APP_CSS: Asset = asset!("/assets/app.css");
+const APP_CSS: &str = include_str!("../assets/app.css");
+const PROTOCOL: &str = "chimeras";
 
 fn main() {
+    let latest_frame = LatestFrame::new();
+    let latest_for_protocol = latest_frame.clone();
+
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
-            dioxus::desktop::Config::new().with_menu(None).with_window(
-                dioxus::desktop::WindowBuilder::new()
-                    .with_title("chimeras demo")
-                    .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0)),
-            ),
+            dioxus::desktop::Config::new()
+                .with_menu(None)
+                .with_custom_protocol(PROTOCOL.to_string(), move |_id, _request| {
+                    serve_frame(&latest_for_protocol)
+                })
+                .with_window(
+                    dioxus::desktop::WindowBuilder::new()
+                        .with_title("chimeras demo")
+                        .with_inner_size(dioxus::desktop::LogicalSize::new(1100.0, 760.0)),
+                ),
         )
+        .with_context(latest_frame)
         .launch(App);
 }
 
@@ -59,25 +69,92 @@ impl LatestFrame {
         self.frame.lock().ok().and_then(|mut slot| slot.take())
     }
 
-    fn peek_data_url(&self) -> Option<String> {
-        let frame = self.frame.lock().ok()?.clone()?;
-        frame_to_data_url(&frame)
+    fn snapshot(&self) -> Option<Frame> {
+        self.frame.lock().ok()?.clone()
     }
 }
 
-fn frame_to_data_url(frame: &Frame) -> Option<String> {
-    let rgb = chimeras::to_rgb8(frame).ok()?;
-    let mut png_bytes = Vec::new();
-    PngEncoder::new(&mut png_bytes)
-        .write_image(
-            &rgb,
-            frame.width,
-            frame.height,
-            image::ExtendedColorType::Rgb8,
-        )
-        .ok()?;
-    let encoded = BASE64.encode(&png_bytes);
-    Some(format!("data:image/png;base64,{encoded}"))
+fn serve_frame(latest: &LatestFrame) -> HttpResponse<Cow<'static, [u8]>> {
+    let bmp = latest
+        .snapshot()
+        .map(|frame| frame_to_bmp(&frame))
+        .unwrap_or_else(placeholder_bmp);
+    HttpResponse::builder()
+        .status(200)
+        .header("Content-Type", "image/bmp")
+        .header("Cache-Control", "no-store")
+        .body(Cow::Owned(bmp))
+        .unwrap()
+}
+
+fn placeholder_bmp() -> Vec<u8> {
+    let pixel = [0u8, 0, 0, 0];
+    let mut buffer = Vec::with_capacity(58);
+    buffer.extend_from_slice(b"BM");
+    buffer.extend_from_slice(&58u32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&54u32.to_le_bytes());
+    buffer.extend_from_slice(&40u32.to_le_bytes());
+    buffer.extend_from_slice(&1i32.to_le_bytes());
+    buffer.extend_from_slice(&(-1i32).to_le_bytes());
+    buffer.extend_from_slice(&1u16.to_le_bytes());
+    buffer.extend_from_slice(&24u16.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&4u32.to_le_bytes());
+    buffer.extend_from_slice(&2835i32.to_le_bytes());
+    buffer.extend_from_slice(&2835i32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&pixel);
+    buffer
+}
+
+fn frame_to_bmp(frame: &Frame) -> Vec<u8> {
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let stride = frame.stride as usize;
+    let effective_stride = if stride == 0 { width * 4 } else { stride };
+    let row_bytes = width * 3;
+    let row_padded = (row_bytes + 3) & !3;
+    let pad = row_padded - row_bytes;
+    let pixel_data_size = row_padded * height;
+    let file_size = 54 + pixel_data_size;
+
+    let mut buffer = Vec::with_capacity(file_size);
+    buffer.extend_from_slice(b"BM");
+    buffer.extend_from_slice(&(file_size as u32).to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&54u32.to_le_bytes());
+
+    buffer.extend_from_slice(&40u32.to_le_bytes());
+    buffer.extend_from_slice(&(width as i32).to_le_bytes());
+    buffer.extend_from_slice(&(-(height as i32)).to_le_bytes());
+    buffer.extend_from_slice(&1u16.to_le_bytes());
+    buffer.extend_from_slice(&24u16.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&(pixel_data_size as u32).to_le_bytes());
+    buffer.extend_from_slice(&2835i32.to_le_bytes());
+    buffer.extend_from_slice(&2835i32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+
+    let padding = [0u8; 3];
+    let data = &frame.plane_primary;
+    for row in 0..height {
+        let row_start = row * effective_stride;
+        let row_end = (row_start + width * 4).min(data.len());
+        let row_slice = &data[row_start.min(data.len())..row_end];
+        for pixel in row_slice.chunks_exact(4) {
+            buffer.push(pixel[0]);
+            buffer.push(pixel[1]);
+            buffer.push(pixel[2]);
+        }
+        if pad > 0 {
+            buffer.extend_from_slice(&padding[..pad]);
+        }
+    }
+
+    buffer
 }
 
 fn refresh_devices(
@@ -108,25 +185,20 @@ fn App() -> Element {
     let selected_index = use_signal(|| 0usize);
     let status = use_signal(|| "Idle".to_string());
     let session: Signal<Option<Session>> = use_signal(|| None);
-    let preview_url = use_signal(|| None::<String>);
+    let preview_tick = use_signal(|| 0u64);
     let saved_path = use_signal(|| None::<String>);
 
-    let latest_frame = use_hook(LatestFrame::new);
+    let latest_frame = use_context::<LatestFrame>();
 
     use_effect(move || {
         refresh_devices(devices, status, selected_index);
     });
 
-    let render_preview_frame = latest_frame.clone();
-    use_future(move || {
-        let latest_frame = render_preview_frame.clone();
-        async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(33)).await;
-                if let Some(url) = latest_frame.peek_data_url() {
-                    preview_url.clone().set(Some(url));
-                }
-            }
+    use_future(move || async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(33)).await;
+            let next = preview_tick.peek().wrapping_add(1);
+            preview_tick.clone().set(next);
         }
     });
 
@@ -233,7 +305,7 @@ fn App() -> Element {
     let connect_label = if is_connected { "Reconnect" } else { "Connect" };
 
     rsx! {
-        document::Stylesheet { href: APP_CSS }
+        style { {APP_CSS} }
         div { class: "app",
             header { class: "title-bar",
                 h1 { "chimeras" }
@@ -292,15 +364,16 @@ fn App() -> Element {
             }
 
             section { class: "preview",
-                if let Some(url) = preview_url() {
-                    img { class: "preview-image", src: "{url}" }
+                if is_connected {
+                    img {
+                        class: "preview-image",
+                        src: "http://{PROTOCOL}.localhost/frame.bmp?t={preview_tick()}",
+                    }
                 } else {
                     div { class: "preview-placeholder",
                         div { class: "placeholder-icon", "●" }
                         div { class: "placeholder-text",
-                            if is_connected {
-                                "Waiting for first frame..."
-                            } else if device_count == 0 {
+                            if device_count == 0 {
                                 "Plug in a camera, grant permission, and press Refresh"
                             } else {
                                 "Press Connect to start streaming"

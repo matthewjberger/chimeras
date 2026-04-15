@@ -8,6 +8,5 @@ publish = false
 chimeras = { path = ".." }
 dioxus = { version = "0.7.3", features = ["desktop"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-base64 = "0.22"
 chrono = "0.4"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
