@@ -103,8 +103,6 @@ Pick a fallback format if the exact request is not supported:
 let picked = chimeras::best_format(&capabilities, &config).expect("no fallback");
 ```
 
-Full method-by-method docs live on [docs.rs](https://docs.rs/chimeras).
-
 ## Examples
 
 See the [examples](examples/) directory:
