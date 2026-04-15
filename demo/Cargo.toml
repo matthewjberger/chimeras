@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-chimeras = { path = ".." }
+chimeras = { path = "..", features = ["rtsp"] }
 dioxus = { version = "0.7.3", features = ["desktop"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = "0.4"

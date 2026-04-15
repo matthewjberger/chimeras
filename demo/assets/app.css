@@ -75,8 +75,49 @@ body {
 
 .controls {
     display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.mode-toggle {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--base-8);
+    border: 1px solid var(--base-25);
+    border-radius: 6px;
+    width: fit-content;
+}
+
+.mode-btn {
+    background: transparent;
+    color: var(--base-60);
+    border: none;
+    padding: 4px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.mode-btn:hover {
+    color: var(--leche);
+}
+
+.mode-btn-active {
+    background: var(--base-15);
+    color: var(--leche);
+}
+
+.rtsp-inputs {
+    display: flex;
     gap: 12px;
     align-items: flex-end;
+}
+
+.field-narrow {
+    flex: 0 0 160px;
 }
 
 .field {

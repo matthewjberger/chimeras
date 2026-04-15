@@ -1,4 +1,4 @@
-use chimeras::{Device, Frame, PixelFormat, Resolution, StreamConfig};
+use chimeras::{Credentials, Device, Frame, PixelFormat, Resolution, StreamConfig};
 use dioxus::desktop::wry::http::Response as HttpResponse;
 use dioxus::prelude::*;
 use image::ImageEncoder;
@@ -116,6 +116,49 @@ fn placeholder_bmp() -> Vec<u8> {
 }
 
 fn frame_to_bmp(frame: &Frame) -> Vec<u8> {
+    match frame.pixel_format {
+        PixelFormat::Bgra8 => bmp_from_bgra(frame),
+        _ => {
+            let Ok(rgb) = chimeras::to_rgb8(frame) else {
+                return placeholder_bmp();
+            };
+            bmp_from_rgb(&rgb, frame.width, frame.height)
+        }
+    }
+}
+
+fn bmp_from_rgb(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let row_bytes = width_usize * 3;
+    let row_padded = (row_bytes + 3) & !3;
+    let pad = row_padded - row_bytes;
+    let pixel_data_size = row_padded * height_usize;
+    let file_size = 54 + pixel_data_size;
+
+    let mut buffer = Vec::with_capacity(file_size);
+    write_bmp_headers(&mut buffer, width, height, pixel_data_size, file_size);
+
+    let padding = [0u8; 3];
+    let expected_bytes = row_bytes * height_usize;
+    for row in 0..height_usize {
+        let start = row * row_bytes;
+        if start + row_bytes > rgb.len() || start + row_bytes > expected_bytes {
+            break;
+        }
+        for pixel in rgb[start..start + row_bytes].chunks_exact(3) {
+            buffer.push(pixel[2]);
+            buffer.push(pixel[1]);
+            buffer.push(pixel[0]);
+        }
+        if pad > 0 {
+            buffer.extend_from_slice(&padding[..pad]);
+        }
+    }
+    buffer
+}
+
+fn bmp_from_bgra(frame: &Frame) -> Vec<u8> {
     let width = frame.width as usize;
     let height = frame.height as usize;
     let stride = frame.stride as usize;
@@ -127,22 +170,13 @@ fn frame_to_bmp(frame: &Frame) -> Vec<u8> {
     let file_size = 54 + pixel_data_size;
 
     let mut buffer = Vec::with_capacity(file_size);
-    buffer.extend_from_slice(b"BM");
-    buffer.extend_from_slice(&(file_size as u32).to_le_bytes());
-    buffer.extend_from_slice(&0u32.to_le_bytes());
-    buffer.extend_from_slice(&54u32.to_le_bytes());
-
-    buffer.extend_from_slice(&40u32.to_le_bytes());
-    buffer.extend_from_slice(&(width as i32).to_le_bytes());
-    buffer.extend_from_slice(&(-(height as i32)).to_le_bytes());
-    buffer.extend_from_slice(&1u16.to_le_bytes());
-    buffer.extend_from_slice(&24u16.to_le_bytes());
-    buffer.extend_from_slice(&0u32.to_le_bytes());
-    buffer.extend_from_slice(&(pixel_data_size as u32).to_le_bytes());
-    buffer.extend_from_slice(&2835i32.to_le_bytes());
-    buffer.extend_from_slice(&2835i32.to_le_bytes());
-    buffer.extend_from_slice(&0u32.to_le_bytes());
-    buffer.extend_from_slice(&0u32.to_le_bytes());
+    write_bmp_headers(
+        &mut buffer,
+        frame.width,
+        frame.height,
+        pixel_data_size,
+        file_size,
+    );
 
     let padding = [0u8; 3];
     let data = &frame.plane_primary;
@@ -161,6 +195,30 @@ fn frame_to_bmp(frame: &Frame) -> Vec<u8> {
     }
 
     buffer
+}
+
+fn write_bmp_headers(
+    buffer: &mut Vec<u8>,
+    width: u32,
+    height: u32,
+    pixel_data_size: usize,
+    file_size: usize,
+) {
+    buffer.extend_from_slice(b"BM");
+    buffer.extend_from_slice(&(file_size as u32).to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&54u32.to_le_bytes());
+    buffer.extend_from_slice(&40u32.to_le_bytes());
+    buffer.extend_from_slice(&(width as i32).to_le_bytes());
+    buffer.extend_from_slice(&(-(height as i32)).to_le_bytes());
+    buffer.extend_from_slice(&1u16.to_le_bytes());
+    buffer.extend_from_slice(&24u16.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&(pixel_data_size as u32).to_le_bytes());
+    buffer.extend_from_slice(&2835i32.to_le_bytes());
+    buffer.extend_from_slice(&2835i32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
+    buffer.extend_from_slice(&0u32.to_le_bytes());
 }
 
 fn refresh_devices(
@@ -185,6 +243,12 @@ fn refresh_devices(
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum SourceMode {
+    Usb,
+    Rtsp,
+}
+
 #[component]
 fn App() -> Element {
     let devices = use_signal(Vec::<Device>::new);
@@ -193,6 +257,10 @@ fn App() -> Element {
     let session: Signal<Option<Session>> = use_signal(|| None);
     let preview_tick = use_signal(|| 0u64);
     let saved_path = use_signal(|| None::<String>);
+    let source_mode = use_signal(|| SourceMode::Usb);
+    let rtsp_url = use_signal(String::new);
+    let rtsp_username = use_signal(String::new);
+    let rtsp_password = use_signal(String::new);
 
     let latest_frame = use_context::<LatestFrame>();
 
@@ -215,17 +283,7 @@ fn App() -> Element {
     let connect = {
         let latest_frame = latest_frame.clone();
         move |_| {
-            let selected = *selected_index.peek();
-            let Some(device) = devices.peek().get(selected).cloned() else {
-                status.clone().set("No camera selected".into());
-                return;
-            };
-
-            session.clone().set(None);
-            status
-                .clone()
-                .set(format!("Connecting to {}...", device.name));
-
+            let mode = *source_mode.peek();
             let config = StreamConfig {
                 resolution: Resolution {
                     width: 1280,
@@ -235,7 +293,39 @@ fn App() -> Element {
                 pixel_format: PixelFormat::Bgra8,
             };
 
-            match chimeras::open(&device, config) {
+            let (open_result, label) = match mode {
+                SourceMode::Usb => {
+                    let selected = *selected_index.peek();
+                    let Some(device) = devices.peek().get(selected).cloned() else {
+                        status.clone().set("No camera selected".into());
+                        return;
+                    };
+                    let label = device.name.clone();
+                    session.clone().set(None);
+                    status.clone().set(format!("Connecting to {label}..."));
+                    (chimeras::open(&device, config), label)
+                }
+                SourceMode::Rtsp => {
+                    let url = rtsp_url.peek().trim().to_string();
+                    if url.is_empty() {
+                        status.clone().set("RTSP URL is empty".into());
+                        return;
+                    }
+                    let username = rtsp_username.peek().trim().to_string();
+                    let password = rtsp_password.peek().to_string();
+                    let credentials = if username.is_empty() && password.is_empty() {
+                        None
+                    } else {
+                        Some(Credentials { username, password })
+                    };
+                    session.clone().set(None);
+                    status.clone().set(format!("Connecting to {url}..."));
+                    let label = url.clone();
+                    (chimeras::open_rtsp(&url, credentials, config), label)
+                }
+            };
+
+            match open_result {
                 Ok(camera) => {
                     let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let shutdown_for_pump = Arc::clone(&shutdown);
@@ -261,7 +351,7 @@ fn App() -> Element {
                         pump: Some(pump),
                         shutdown,
                     }));
-                    status.clone().set(format!("Streaming: {}", device.name));
+                    status.clone().set(format!("Streaming: {label}"));
                 }
                 Err(error) => status.clone().set(format!("Open failed: {error}")),
             }
@@ -309,6 +399,13 @@ fn App() -> Element {
     let device_count = devices().len();
     let is_connected = session.peek().is_some();
     let connect_label = if is_connected { "Reconnect" } else { "Connect" };
+    let mode = source_mode();
+    let is_usb = mode == SourceMode::Usb;
+    let is_rtsp = mode == SourceMode::Rtsp;
+    let connect_enabled = match mode {
+        SourceMode::Usb => device_count > 0,
+        SourceMode::Rtsp => !rtsp_url().trim().is_empty(),
+    };
 
     rsx! {
         style { {APP_CSS} }
@@ -319,35 +416,83 @@ fn App() -> Element {
             }
 
             section { class: "controls",
-                div { class: "field",
-                    span { class: "field-label", "Camera" }
-                    select {
-                        class: "input",
-                        disabled: device_count == 0,
-                        onchange: move |event| {
-                            if let Ok(index) = event.value().parse::<usize>() {
-                                selected_index.clone().set(index);
+                div { class: "mode-toggle",
+                    button {
+                        class: if is_usb { "mode-btn mode-btn-active" } else { "mode-btn" },
+                        onclick: move |_| source_mode.clone().set(SourceMode::Usb),
+                        "USB"
+                    }
+                    button {
+                        class: if is_rtsp { "mode-btn mode-btn-active" } else { "mode-btn" },
+                        onclick: move |_| source_mode.clone().set(SourceMode::Rtsp),
+                        "RTSP"
+                    }
+                }
+
+                if is_usb {
+                    div { class: "field",
+                        span { class: "field-label", "Camera" }
+                        select {
+                            class: "input",
+                            disabled: device_count == 0,
+                            onchange: move |event| {
+                                if let Ok(index) = event.value().parse::<usize>() {
+                                    selected_index.clone().set(index);
+                                }
+                            },
+                            if device_count == 0 {
+                                option { "No cameras detected" }
+                            } else {
+                                for (index, device) in devices().iter().enumerate() {
+                                    option { value: "{index}", "{device.name}" }
+                                }
                             }
-                        },
-                        if device_count == 0 {
-                            option { "No cameras detected" }
-                        } else {
-                            for (index, device) in devices().iter().enumerate() {
-                                option { value: "{index}", "{device.name}" }
+                        }
+                    }
+                } else {
+                    div { class: "rtsp-inputs",
+                        div { class: "field",
+                            span { class: "field-label", "RTSP URL" }
+                            input {
+                                class: "input",
+                                r#type: "text",
+                                placeholder: "rtsp://127.0.0.1:8554/live",
+                                value: "{rtsp_url()}",
+                                oninput: move |event| rtsp_url.clone().set(event.value()),
+                            }
+                        }
+                        div { class: "field field-narrow",
+                            span { class: "field-label", "Username" }
+                            input {
+                                class: "input",
+                                r#type: "text",
+                                value: "{rtsp_username()}",
+                                oninput: move |event| rtsp_username.clone().set(event.value()),
+                            }
+                        }
+                        div { class: "field field-narrow",
+                            span { class: "field-label", "Password" }
+                            input {
+                                class: "input",
+                                r#type: "password",
+                                value: "{rtsp_password()}",
+                                oninput: move |event| rtsp_password.clone().set(event.value()),
                             }
                         }
                     }
                 }
 
                 div { class: "button-row",
-                    button {
-                        class: "btn btn-ghost",
-                        onclick: refresh,
-                        "Refresh"
+                    if is_usb {
+                        button {
+                            class: "btn btn-ghost",
+                            onclick: refresh,
+                            "Refresh"
+                        }
                     }
                     button {
                         class: "btn btn-primary",
-                        disabled: device_count == 0,
+                        disabled: !connect_enabled,
                         onclick: connect,
                         "{connect_label}"
                     }
@@ -379,7 +524,9 @@ fn App() -> Element {
                     div { class: "preview-placeholder",
                         div { class: "placeholder-icon", "●" }
                         div { class: "placeholder-text",
-                            if device_count == 0 {
+                            if is_rtsp {
+                                "Enter an RTSP URL and press Connect"
+                            } else if device_count == 0 {
                                 "Plug in a camera, grant permission, and press Refresh"
                             } else {
                                 "Press Connect to start streaming"
