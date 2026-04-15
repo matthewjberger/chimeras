@@ -11,9 +11,7 @@ use crate::error::Error;
 use crate::types::{Frame, FrameQuality, PixelFormat};
 use bytes::Bytes;
 use objc2::rc::Retained;
-use objc2_core_foundation::{
-    CFDictionary, CFMutableDictionary, CFNumber, CFRetained, CFString, kCFAllocatorDefault,
-};
+use objc2_core_foundation::{CFDictionary, CFMutableDictionary, CFNumber, CFRetained, CFString};
 use objc2_core_media::{
     CMBlockBuffer, CMBlockBufferCreateWithMemoryBlock, CMFormatDescription, CMSampleBuffer,
     CMSampleBufferCreate, CMTime, CMTimeFlags, CMVideoFormatDescriptionCreateFromH264ParameterSets,
@@ -435,9 +433,4 @@ fn duration_to_cmtime(duration: Duration) -> CMTime {
         flags: CMTimeFlags::Valid,
         epoch: 0,
     }
-}
-
-#[allow(dead_code)]
-fn _allocator_default() -> Option<&'static objc2_core_foundation::CFAllocator> {
-    unsafe { kCFAllocatorDefault }
 }
