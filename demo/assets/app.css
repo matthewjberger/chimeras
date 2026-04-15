@@ -50,7 +50,7 @@ body {
     flex-direction: column;
     gap: 16px;
     padding: 24px 28px 28px;
-    max-width: 1100px;
+    max-width: 1400px;
     margin: 0 auto;
 }
 
@@ -58,6 +58,89 @@ body {
     display: flex;
     align-items: baseline;
     gap: 12px;
+}
+
+.add-stream-btn {
+    margin-left: auto;
+    align-self: center;
+}
+
+.stream-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.stream-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: var(--base-5);
+    border: 1px solid var(--base-20);
+    border-radius: 10px;
+}
+
+.stream-cell-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.stream-cell-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--base-70);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.stream-cell-remove {
+    margin-left: auto;
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.stream-cell-inputs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.stream-cell-inputs .input {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.stream-cell-inputs .input-narrow {
+    flex: 1 1 140px;
+}
+
+.stream-cell-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.stream-cell-status {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 12px;
+    color: var(--base-70);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stream-cell-preview {
+    aspect-ratio: 16 / 9;
+    background: var(--base-0);
+    border: 1px solid var(--base-20);
+    border-radius: 6px;
+    overflow: hidden;
 }
 
 .title-bar h1 {

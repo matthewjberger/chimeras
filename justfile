@@ -59,10 +59,12 @@ rtsp-host:
   mediamtx
 
 # Publish a local MP4 file to the running mediamtx as an RTSP stream at
-# rtsp://127.0.0.1:8554/live. Assumes `just rtsp-host` is running in
-# another terminal. Requires ffmpeg on PATH.
-rtsp-publish args="test_video.mp4":
-  ffmpeg -re -stream_loop -1 -i {{args}} -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/live
+# rtsp://127.0.0.1:8554/<path>. Each unique path is an independent stream
+# so you can run this in several terminals with different paths to feed
+# the demo's grid view. Assumes `just rtsp-host` is running. Requires
+# ffmpeg on PATH.
+rtsp-publish file="test_video.mp4" path="live":
+  ffmpeg -re -stream_loop -1 -i {{file}} -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/{{path}}
 
 # Check for unused dependencies with cargo-machete
 udeps:
