@@ -14,7 +14,6 @@
 //! | macOS    | AVFoundation via `objc2` | retina + VideoToolbox (H.264 / H.265 / MJPEG) |
 //! | Windows  | Media Foundation via `windows` | retina + Media Foundation (H.264 / H.265 / MJPEG) |
 //! | Linux    | V4L2 via `v4l` | not supported |
-//! | Others   | [`Error::BackendNotImplemented`] | not supported |
 //!
 //! # Quick Start
 //!

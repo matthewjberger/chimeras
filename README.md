@@ -60,7 +60,6 @@ Dropping the `Camera` stops the stream. Dropping the `DeviceMonitor` joins its w
 | macOS    | AVFoundation (via `objc2`) | retina + VideoToolbox (H.264 / H.265 / MJPEG) |
 | Windows  | Media Foundation (via `windows`) | retina + Media Foundation (H.264 / H.265 / MJPEG) |
 | Linux    | V4L2 mmap streaming (via `v4l`) | not supported |
-| Other    | Returns `Error::BackendNotImplemented` | not supported |
 
 ## API Overview
 
