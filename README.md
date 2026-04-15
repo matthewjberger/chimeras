@@ -17,7 +17,7 @@
 
 The public surface is plain data types (`Device`, `Capabilities`, `FormatDescriptor`, `StreamConfig`, `Frame`) and a handful of free functions. There are no trait objects in the public API, no hidden global state, and no `unsafe` required of consumers.
 
-https://github.com/user-attachments/assets/be7a0b09-3541-4d5e-8c01-21f4524574fa
+https://github.com/user-attachments/assets/8e2f4a5f-0e70-4cf7-a8de-942c0d2fada5
 
 ## Quick Start
 
