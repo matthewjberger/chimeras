@@ -53,20 +53,24 @@ run-capture:
   cargo run -p chimeras --example capture
 
 # Serve a local MP4 file as an RTSP stream on rtsp://127.0.0.1:8554/live.
-# Requires mediamtx and ffmpeg on PATH. Most MP4s are H.264; chimeras does
-# not yet decode H.264/H.265 RTSP streams, so `just run` against this URL
+# Requires mediamtx and ffmpeg on PATH. Video stream is passed through
+# as-is (most MP4s are H.264); audio is dropped because mediamtx rejects
+# many audio codecs in the RTSP publish path. chimeras does not yet
+# decode H.264/H.265 RTSP streams, so `just run` against this URL
 # will surface Error::FormatNotSupported until that lands.
 [unix]
 serve-rtsp args="test_video.mp4":
   @echo "note: chimeras does not yet decode H.264/H.265 RTSP streams"
   mediamtx &
-  ffmpeg -re -stream_loop -1 -i {{args}} -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/live
+  sleep 1
+  ffmpeg -re -stream_loop -1 -i {{args}} -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 
 [windows]
 serve-rtsp args="test_video.mp4":
   @echo "note: chimeras does not yet decode H.264/H.265 RTSP streams"
   start mediamtx
-  ffmpeg -re -stream_loop -1 -i {{args}} -c copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/live
+  powershell -Command "Start-Sleep -Seconds 1"
+  ffmpeg -re -stream_loop -1 -i {{args}} -an -c:v copy -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 
 # Check for unused dependencies with cargo-machete
 udeps:
