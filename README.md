@@ -55,12 +55,12 @@ Dropping the `Camera` stops the stream. Dropping the `DeviceMonitor` joins its w
 
 ## Platform Support
 
-| Platform | Backend |
-|----------|---------|
-| macOS    | AVFoundation (via `objc2`) |
-| Windows  | Media Foundation (via `windows`) |
-| Linux    | V4L2 with mmap streaming (via `v4l`) |
-| Other    | Returns `Error::BackendNotImplemented` |
+| Platform | USB / Built-in | RTSP (`rtsp` feature) |
+|----------|----------------|------------------------|
+| macOS    | AVFoundation (via `objc2`) | retina + VideoToolbox (H.264 / H.265 / MJPEG) |
+| Windows  | Media Foundation (via `windows`) | retina + Media Foundation (H.264 / H.265 / MJPEG) |
+| Linux    | V4L2 mmap streaming (via `v4l`) | not supported |
+| Other    | Returns `Error::BackendNotImplemented` | not supported |
 
 ## API Overview
 

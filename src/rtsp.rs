@@ -1,15 +1,18 @@
 //! RTSP network camera backend.
 //!
-//! Gated behind the `rtsp` feature. Pulls encoded frames off the wire via
-//! [`retina`](https://docs.rs/retina) and delivers them through the same [`Camera`]
-//! shape as the USB backends.
+//! Gated behind the `rtsp` feature on macOS and Windows only. Pulls encoded
+//! frames off the wire via [`retina`](https://docs.rs/retina) and delivers
+//! them through the same [`Camera`] shape as the USB backends.
 //!
-//! This first pass supports **MJPEG-over-RTSP** end-to-end: frames arrive as
-//! [`PixelFormat::Mjpeg`] and can be decoded via [`crate::to_rgb8`] (which uses
-//! `zune-jpeg`). H.264 and H.265 streams return [`Error::FormatNotSupported`]
-//! until a Rust-side decoder is wired in.
+//! Codec support:
+//!
+//! - **MJPEG**: passthrough. Frames arrive as [`PixelFormat::Mjpeg`] and decode
+//!   via [`crate::to_rgb8`] (which uses `zune-jpeg`).
+//! - **H.264 / H.265**: hardware-accelerated native platform decoder, BGRA
+//!   output. macOS uses `VideoToolbox`; Windows uses Media Foundation.
 
 use crate::camera::{Camera, Handle};
+use crate::decode::{Decoder, VideoCodec, VideoDecoder};
 use crate::error::Error;
 use crate::types::{Credentials, Frame, FrameQuality, PixelFormat, Resolution, StreamConfig};
 use bytes::Bytes;
@@ -141,12 +144,10 @@ async fn run_session(
         return;
     };
 
-    let pixel_format = match encoding.as_str() {
-        "jpeg" => PixelFormat::Mjpeg,
-        "h264" | "h265" | "hevc" => {
-            let _ = ready_tx.send(Err(Error::FormatNotSupported));
-            return;
-        }
+    let (pixel_format, video_codec) = match encoding.as_str() {
+        "jpeg" => (PixelFormat::Mjpeg, None),
+        "h264" => (PixelFormat::Bgra8, Some(VideoCodec::H264)),
+        "h265" | "hevc" => (PixelFormat::Bgra8, Some(VideoCodec::H265)),
         other => {
             let _ = ready_tx.send(Err(Error::Backend {
                 platform: "rtsp",
@@ -154,6 +155,18 @@ async fn run_session(
             }));
             return;
         }
+    };
+
+    let extradata = extradata_for_stream(&session, video_index);
+    let mut decoder: Option<Decoder> = match video_codec {
+        Some(codec) => match Decoder::new(codec, &extradata) {
+            Ok(decoder) => Some(decoder),
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
+                return;
+            }
+        },
+        None => None,
     };
 
     if let Err(error) = session
@@ -235,20 +248,54 @@ async fn run_session(
         } else {
             FrameQuality::Intact
         };
+        let timestamp = timestamp_to_duration(&video);
 
-        let frame = Frame {
-            width: current_resolution.width,
-            height: current_resolution.height,
-            stride: 0,
-            timestamp: timestamp_to_duration(&video),
-            pixel_format,
-            quality,
-            plane_primary: Bytes::copy_from_slice(video.data()),
-            plane_secondary: Bytes::new(),
-        };
-
-        let _ = frame_tx.try_send(Ok(frame));
+        match decoder.as_mut() {
+            Some(decoder) => match decoder.decode(video.data(), timestamp) {
+                Ok(mut decoded) => {
+                    for mut frame in decoded.drain(..) {
+                        frame.timestamp = timestamp;
+                        frame.quality = quality;
+                        if frame_tx.try_send(Ok(frame)).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = frame_tx.try_send(Err(error));
+                    break;
+                }
+            },
+            None => {
+                let frame = Frame {
+                    width: current_resolution.width,
+                    height: current_resolution.height,
+                    stride: 0,
+                    timestamp,
+                    pixel_format,
+                    quality,
+                    plane_primary: Bytes::copy_from_slice(video.data()),
+                    plane_secondary: Bytes::new(),
+                };
+                let _ = frame_tx.try_send(Ok(frame));
+            }
+        }
     }
+}
+
+fn extradata_for_stream(
+    session: &retina::client::Session<retina::client::Described>,
+    video_index: usize,
+) -> Vec<u8> {
+    session
+        .streams()
+        .get(video_index)
+        .and_then(|stream| stream.parameters())
+        .and_then(|params| match params {
+            retina::codec::ParametersRef::Video(video) => Some(video.extra_data().to_vec()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 fn find_video_stream(

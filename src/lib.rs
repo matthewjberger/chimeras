@@ -9,12 +9,12 @@
 //!
 //! # Platform support
 //!
-//! | Platform | Backend |
-//! |----------|---------|
-//! | macOS    | AVFoundation via `objc2` |
-//! | Windows  | Media Foundation via `windows` |
-//! | Linux    | V4L2 via `v4l` |
-//! | Others   | [`Error::BackendNotImplemented`] |
+//! | Platform | USB / Built-in | RTSP (`rtsp` feature) |
+//! |----------|---------------|-----------------------|
+//! | macOS    | AVFoundation via `objc2` | retina + VideoToolbox (H.264 / H.265 / MJPEG) |
+//! | Windows  | Media Foundation via `windows` | retina + Media Foundation (H.264 / H.265 / MJPEG) |
+//! | Linux    | V4L2 via `v4l` | not supported |
+//! | Others   | [`Error::BackendNotImplemented`] | not supported |
 //!
 //! # Quick Start
 //!
@@ -111,10 +111,13 @@ pub use types::{
     FrameQuality, FramerateRange, PixelFormat, Position, Resolution, StreamConfig, Transport,
 };
 
-#[cfg(feature = "rtsp")]
+#[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]
 pub mod rtsp;
-#[cfg(feature = "rtsp")]
+#[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]
 pub use rtsp::open_rtsp;
+
+#[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]
+mod decode;
 
 use std::time::Duration;
 
