@@ -28,11 +28,20 @@ include = [
     "LICENSE-APACHE",
 ]
 
+[features]
+default = []
+rtsp = ["dep:retina", "dep:tokio", "dep:url", "dep:futures-util"]
+
 [dependencies]
 bytes = "1"
 crossbeam-channel = "0.5"
 thiserror = "2"
 zune-jpeg = "0.4"
+
+retina = { version = "0.4", optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"], optional = true }
+url = { version = "2", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"] }

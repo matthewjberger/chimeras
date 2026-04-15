@@ -32,8 +32,22 @@ pub enum Transport {
     Usb,
     /// Software virtual camera (OBS, Continuity, etc.).
     Virtual,
+    /// Network camera reached over a protocol such as RTSP.
+    Network,
     /// Transport type is unknown or not represented above.
     Other,
+}
+
+/// Credentials for authenticating to a network camera.
+///
+/// Passed to [`crate::open_rtsp`] separately from the URL so the URL can be
+/// logged or stored safely without leaking the password.
+#[derive(Clone, Debug)]
+pub struct Credentials {
+    /// Username, plain text.
+    pub username: String,
+    /// Password, plain text. Be deliberate about where this is stored.
+    pub password: String,
 }
 
 /// A camera the platform can see. Enumerated by [`crate::devices`].
@@ -120,6 +134,19 @@ pub struct StreamConfig {
     pub pixel_format: PixelFormat,
 }
 
+/// Indicates whether a delivered frame is pixel-perfect or potentially corrupted.
+///
+/// Network sources (RTSP) can lose packets and produce frames that reference missing
+/// past data, smearing macroblocks until the next keyframe. USB backends always return
+/// [`FrameQuality::Intact`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FrameQuality {
+    /// Pixel data is complete and trustworthy.
+    Intact,
+    /// The decoder recovered from packet loss; pixels may be visibly wrong for a few frames.
+    Recovering,
+}
+
 /// A single captured video frame.
 ///
 /// Frame data lives in [`Bytes`], which is reference-counted; cloning a `Frame` does not
@@ -141,6 +168,8 @@ pub struct Frame {
     pub timestamp: Duration,
     /// Pixel format that describes both planes.
     pub pixel_format: PixelFormat,
+    /// Pixel data integrity. Always [`FrameQuality::Intact`] for USB backends.
+    pub quality: FrameQuality,
     /// Primary plane bytes (or the whole frame for single-plane formats).
     pub plane_primary: Bytes,
     /// Secondary plane bytes (UV plane for NV12). Empty for single-plane formats.

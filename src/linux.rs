@@ -144,10 +144,10 @@ impl Backend for Driver {
                 pixel_format: applied_pixel_format,
             },
             frame_rx,
-            handle: SessionHandle {
+            handle: crate::camera::Handle::Native(SessionHandle {
                 shutdown,
                 worker: Some(worker),
-            },
+            }),
         })
     }
 
@@ -247,6 +247,7 @@ fn stream_loop(
                     stride,
                     timestamp,
                     pixel_format,
+                    quality: crate::types::FrameQuality::Intact,
                     plane_primary,
                     plane_secondary,
                 };

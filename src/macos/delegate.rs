@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::types::{Frame, PixelFormat};
+use crate::types::{Frame, FrameQuality, PixelFormat};
 use bytes::Bytes;
 use crossbeam_channel::Sender;
 use objc2::rc::Retained;
@@ -85,6 +85,7 @@ fn handle_sample_buffer(delegate: &FrameDelegate, sample_buffer: &CMSampleBuffer
         stride,
         timestamp,
         pixel_format: PixelFormat::Bgra8,
+        quality: FrameQuality::Intact,
         plane_primary: Bytes::from(data),
         plane_secondary: Bytes::new(),
     };

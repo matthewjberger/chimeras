@@ -107,9 +107,14 @@ pub use convert::{to_rgb8, to_rgba8};
 pub use error::Error;
 pub use monitor::{DeviceMonitor, next_event, try_next_event};
 pub use types::{
-    Capabilities, Device, DeviceEvent, DeviceId, FormatDescriptor, Frame, FramerateRange,
-    PixelFormat, Position, Resolution, StreamConfig, Transport,
+    Capabilities, Credentials, Device, DeviceEvent, DeviceId, FormatDescriptor, Frame,
+    FrameQuality, FramerateRange, PixelFormat, Position, Resolution, StreamConfig, Transport,
 };
+
+#[cfg(feature = "rtsp")]
+pub mod rtsp;
+#[cfg(feature = "rtsp")]
+pub use rtsp::open_rtsp;
 
 use std::time::Duration;
 

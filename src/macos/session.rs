@@ -77,7 +77,7 @@ pub fn open(id: &DeviceId, config: StreamConfig) -> Result<Camera, Error> {
     Ok(Camera {
         config,
         frame_rx,
-        handle: SessionHandle { session, delegate },
+        handle: crate::camera::Handle::Native(SessionHandle { session, delegate }),
     })
 }
 

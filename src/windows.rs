@@ -93,10 +93,10 @@ impl Backend for Driver {
         Ok(Camera {
             config: applied,
             frame_rx,
-            handle: SessionHandle {
+            handle: crate::camera::Handle::Native(SessionHandle {
                 shutdown,
                 worker: Some(worker),
-            },
+            }),
         })
     }
 
@@ -636,6 +636,7 @@ fn read_next_sample(
         stride,
         timestamp: frame_timestamp,
         pixel_format: applied.pixel_format,
+        quality: crate::types::FrameQuality::Intact,
         plane_primary: Bytes::from(data),
         plane_secondary: Bytes::new(),
     }))
