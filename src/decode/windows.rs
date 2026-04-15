@@ -92,11 +92,18 @@ impl VideoDecoder for MediaFoundationDecoder {
 
 impl MediaFoundationDecoder {
     fn pull_output(&mut self) -> Result<Option<Frame>, Error> {
-        let output_sample = create_empty_output_sample(self.width, self.height)?;
+        let info = unsafe { self.transform.GetOutputStreamInfo(0) }.map_err(map_error)?;
+        let provides_samples = info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
+
+        let pre_allocated = if provides_samples {
+            None
+        } else {
+            Some(create_empty_output_sample(self.width, self.height)?)
+        };
 
         let mut buffer = MFT_OUTPUT_DATA_BUFFER {
             dwStreamID: 0,
-            pSample: std::mem::ManuallyDrop::new(Some(output_sample.clone())),
+            pSample: std::mem::ManuallyDrop::new(pre_allocated),
             dwStatus: 0,
             pEvents: std::mem::ManuallyDrop::new(None),
         };
@@ -109,7 +116,11 @@ impl MediaFoundationDecoder {
 
         match hr {
             Ok(()) => {
-                let bgra = sample_to_bgra(&output_sample, self.width, self.height, self.stride)?;
+                let decoded = unsafe { std::mem::ManuallyDrop::take(&mut buffer.pSample) };
+                let Some(sample) = decoded else {
+                    return Ok(None);
+                };
+                let bgra = sample_to_bgra(&sample, self.width, self.height, self.stride)?;
                 Ok(Some(Frame {
                     width: self.width,
                     height: self.height,
@@ -195,7 +206,7 @@ fn activate_decoder(subtype: GUID) -> Result<IMFTransform, Error> {
     unsafe {
         MFTEnumEx(
             MFT_CATEGORY_VIDEO_DECODER,
-            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+            MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
             Some(&info),
             None,
             &mut activates,
