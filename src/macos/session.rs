@@ -98,11 +98,9 @@ fn configure_device(
     unsafe { device.setActiveFormat(format) };
 
     if let Some(duration) = pick_frame_duration(format, framerate) {
-        let result = unsafe {
-            objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
-                device.setActiveVideoMinFrameDuration(duration);
-            }))
-        };
+        let result = objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
+            device.setActiveVideoMinFrameDuration(duration);
+        }));
         if let Err(exception) = result {
             unsafe { device.unlockForConfiguration() };
             let message = exception

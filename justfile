@@ -28,6 +28,14 @@ format-check:
 lint:
   cargo clippy --workspace --all-targets -- -D warnings
 
+# Check just the published library
+check-lib:
+  cargo check -p chimeras --all-targets
+
+# Lint just the published library
+lint-lib:
+  cargo clippy -p chimeras --all-targets -- -D warnings
+
 # Run the chimeras-demo with hot-reloading
 run: _require-dx
   dx serve -p chimeras-demo --hotpatch
@@ -47,6 +55,14 @@ run-capture:
 # Check for unused dependencies with cargo-machete
 udeps:
   cargo machete
+
+# Dry-run publish to crates.io
+publish-dry:
+  cargo publish -p chimeras --dry-run
+
+# Publish chimeras to crates.io (requires cargo login)
+publish:
+  cargo publish -p chimeras
 
 # Display toolchain versions
 @versions:

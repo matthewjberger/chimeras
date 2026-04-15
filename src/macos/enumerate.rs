@@ -147,11 +147,7 @@ fn compose_device_name(manufacturer: &str, model: &str, localized: &str) -> Stri
 }
 
 fn normalize_vendor_fragment(value: &str) -> String {
-    value
-        .trim()
-        .trim_end_matches(|c: char| c == '.' || c == ',')
-        .trim()
-        .to_string()
+    value.trim().trim_end_matches(['.', ',']).trim().to_string()
 }
 
 fn normalize_model_fragment(value: &str) -> String {

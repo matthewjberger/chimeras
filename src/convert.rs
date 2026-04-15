@@ -1,6 +1,16 @@
+//! Pixel format conversion helpers.
+//!
+//! Frames come out of the library in whatever native format the platform delivered.
+//! These functions convert them to the two formats most consumers want: packed RGB8
+//! (24 bits per pixel) and packed RGBA8 (32 bits per pixel). Stride is honored, so the
+//! output is always tightly packed regardless of how padded the source buffer was.
+
 use crate::error::Error;
 use crate::types::{Frame, PixelFormat};
 
+/// Convert a frame to packed 24-bit RGB (3 bytes per pixel).
+///
+/// Supports every [`PixelFormat`]. MJPEG is decoded via `zune-jpeg`.
 pub fn to_rgb8(frame: &Frame) -> Result<Vec<u8>, Error> {
     let width = frame.width as usize;
     let height = frame.height as usize;
@@ -21,6 +31,10 @@ pub fn to_rgb8(frame: &Frame) -> Result<Vec<u8>, Error> {
     }
 }
 
+/// Convert a frame to packed 32-bit RGBA (4 bytes per pixel).
+///
+/// For formats without an alpha channel (RGB8, YUYV, NV12, MJPEG), the alpha byte is
+/// filled with 0xFF. For BGRA8, the channel order is swapped in place.
 pub fn to_rgba8(frame: &Frame) -> Result<Vec<u8>, Error> {
     match frame.pixel_format {
         PixelFormat::Rgba8 => Ok(frame.plane_primary.to_vec()),

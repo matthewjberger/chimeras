@@ -42,7 +42,7 @@ jobs:
         run: just format-check
 
       - name: check
-        run: just check
+        run: just check-lib
 
       - name: lint
-        run: just lint
+        run: just lint-lib

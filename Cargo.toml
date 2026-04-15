@@ -6,11 +6,27 @@ name = "chimeras"
 version = "0.1.0"
 authors = ["Matthew Berger <matthewjordanberger@gmail.com>"]
 edition = "2024"
-description = "A cross-platform camera library built with data-oriented design"
+rust-version = "1.85"
+description = """
+A cross-platform camera library for Rust, built with data-oriented design.
+Explicit format negotiation, push-based frame delivery, typed errors, and zero
+trait objects.
+"""
 homepage = "https://github.com/matthewjberger/chimeras"
 repository = "https://github.com/matthewjberger/chimeras"
-keywords = ["camera", "webcam", "video", "capture", "cross-platform"]
+documentation = "https://docs.rs/chimeras"
+readme = "README.md"
+keywords = ["camera", "webcam", "video", "capture", "mjpeg"]
+categories = ["multimedia::video", "hardware-support", "api-bindings"]
 license = "MIT OR Apache-2.0"
+include = [
+    "src/**/*.rs",
+    "examples/**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
 
 [dependencies]
 bytes = "1"

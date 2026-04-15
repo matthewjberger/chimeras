@@ -1,4 +1,74 @@
+//! A cross-platform camera library for Rust, built with data-oriented design.
+//!
+//! `chimeras` exposes plain data ([`Device`], [`Capabilities`], [`FormatDescriptor`],
+//! [`StreamConfig`], [`Frame`]) and free functions that operate on that data. Every
+//! public type has public fields. Format negotiation is explicit: you probe, you pick,
+//! you open. Errors are typed. Platform dispatch happens at compile time via `cfg` and
+//! the associated-type [`Backend`] trait; there are zero trait objects anywhere in the
+//! library.
+//!
+//! # Platform support
+//!
+//! | Platform | Backend |
+//! |----------|---------|
+//! | macOS    | AVFoundation via `objc2` |
+//! | Windows  | Media Foundation via `windows` |
+//! | Linux    | V4L2 via `v4l` |
+//! | Others   | [`Error::BackendNotImplemented`] |
+//!
+//! # Quick Start
+//!
+//! ```no_run
+//! use std::time::Duration;
+//!
+//! fn main() -> Result<(), chimeras::Error> {
+//!     let devices = chimeras::devices()?;
+//!     let device = devices.first().expect("no cameras");
+//!
+//!     let capabilities = chimeras::probe(device)?;
+//!     println!("{} formats available", capabilities.formats.len());
+//!
+//!     let config = chimeras::StreamConfig {
+//!         resolution: chimeras::Resolution { width: 1280, height: 720 },
+//!         framerate: 30,
+//!         pixel_format: chimeras::PixelFormat::Bgra8,
+//!     };
+//!
+//!     let camera = chimeras::open(device, config)?;
+//!
+//!     for _ in 0..30 {
+//!         let frame = chimeras::next_frame(&camera, Duration::from_secs(2))?;
+//!         let rgb = chimeras::to_rgb8(&frame)?;
+//!         println!("{}x{} -> {} bytes rgb", frame.width, frame.height, rgb.len());
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! Dropping the [`Camera`] stops the stream. Dropping the [`DeviceMonitor`] joins its
+//! polling worker.
+//!
+//! # Design
+//!
+//! - **Data-oriented**: Types hold data. Functions operate on data. No `impl` blocks with
+//!   hidden accessors, no trait objects, no inheritance.
+//! - **Explicit format negotiation**: [`probe`] returns every format a device supports.
+//!   You pick one and pass it to [`open`] via [`StreamConfig`]. If you want a fallback,
+//!   [`best_format`] picks the closest match.
+//! - **Push-based delivery**: Each [`Camera`] owns a worker thread and a bounded crossbeam
+//!   channel. The consumer pulls frames with a timeout via [`next_frame`]. If the consumer
+//!   falls behind, old frames are dropped, not buffered.
+//! - **Typed errors**: See [`Error`].
+//! - **Pluggable pixel conversion**: [`to_rgb8`] / [`to_rgba8`] decode from BGRA, RGBA,
+//!   YUYV, NV12, and MJPEG (via `zune-jpeg`), honoring stride.
+//! - **Hotplug**: [`monitor`] returns a [`DeviceMonitor`] that emits
+//!   [`DeviceEvent::Added`] / [`DeviceEvent::Removed`] as cameras appear and disappear.
+//! - **Compile-time backend contract**: Platform backends are selected with `cfg`. Each is
+//!   a `Driver` struct that implements [`Backend`]. No `Box<dyn Backend>`; the compiler
+//!   verifies every platform implements the same surface.
 #![deny(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
 
 pub mod backend;
 pub mod camera;
@@ -43,22 +113,51 @@ pub use types::{
 
 use std::time::Duration;
 
+/// Enumerate every video capture device the platform currently sees.
+///
+/// On macOS this triggers the system camera permission prompt on first call
+/// if it hasn't been granted. On Linux this reads `/dev/video*`. On Windows
+/// this queries Media Foundation via `MFEnumDeviceSources`.
 pub fn devices() -> Result<Vec<Device>, Error> {
     <ActiveBackend as Backend>::devices()
 }
 
+/// Inspect a device's full set of supported formats without opening a stream.
+///
+/// Returns every native `(resolution, framerate_range, pixel_format)` tuple the
+/// device reports. On macOS and Linux this is cheap metadata; on Windows it
+/// instantiates a source reader briefly.
 pub fn probe(device: &Device) -> Result<Capabilities, Error> {
     <ActiveBackend as Backend>::probe(&device.id)
 }
 
+/// Open a camera with the given configuration and start streaming.
+///
+/// The returned [`Camera`] owns a worker thread that pushes frames into a
+/// bounded crossbeam channel. Read them with [`next_frame`] or [`try_next_frame`].
+/// Dropping the [`Camera`] stops the stream.
 pub fn open(device: &Device, config: StreamConfig) -> Result<Camera, Error> {
     <ActiveBackend as Backend>::open(&device.id, config)
 }
 
+/// Start a hotplug monitor.
+///
+/// Returns a [`DeviceMonitor`] that emits [`DeviceEvent::Added`] / [`DeviceEvent::Removed`]
+/// as cameras appear and disappear. Initial events are emitted for every device already
+/// present when the monitor starts. Dropping the monitor joins its polling worker.
 pub fn monitor() -> Result<DeviceMonitor, Error> {
     <ActiveBackend as Backend>::monitor()
 }
 
+/// Pick the closest supported format to a requested `StreamConfig`.
+///
+/// Tries, in order:
+/// 1. An exact match on `(pixel_format, resolution, framerate)`.
+/// 2. Any format at the requested resolution.
+/// 3. The format whose resolution has the smallest total width + height delta
+///    from the request.
+///
+/// Returns `None` only if `capabilities.formats` is empty.
 pub fn best_format(capabilities: &Capabilities, config: &StreamConfig) -> Option<FormatDescriptor> {
     let mut exact = capabilities
         .formats
@@ -94,4 +193,5 @@ pub fn best_format(capabilities: &Capabilities, config: &StreamConfig) -> Option
         .cloned()
 }
 
+/// A reasonable default timeout for [`next_frame`] when you don't want to hand-pick one.
 pub const DEFAULT_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
