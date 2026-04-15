@@ -230,7 +230,7 @@ fn pixel_buffer_to_frame(pb: &CVPixelBuffer) -> Option<Frame> {
 
     let width = CVPixelBufferGetWidth(pb) as u32;
     let height = CVPixelBufferGetHeight(pb) as u32;
-    let plane_count = unsafe { CVPixelBufferGetPlaneCount(pb) };
+    let plane_count = CVPixelBufferGetPlaneCount(pb);
     let result = if plane_count >= 2 {
         copy_biplanar_nv12(pb, width, height)
     } else {
@@ -244,12 +244,12 @@ fn pixel_buffer_to_frame(pb: &CVPixelBuffer) -> Option<Frame> {
 }
 
 fn copy_biplanar_nv12(pb: &CVPixelBuffer, width: u32, height: u32) -> Option<Frame> {
-    let y_stride = unsafe { CVPixelBufferGetBytesPerRowOfPlane(pb, 0) };
-    let y_rows = unsafe { CVPixelBufferGetHeightOfPlane(pb, 0) };
-    let uv_stride = unsafe { CVPixelBufferGetBytesPerRowOfPlane(pb, 1) };
-    let uv_rows = unsafe { CVPixelBufferGetHeightOfPlane(pb, 1) };
-    let y_base = unsafe { CVPixelBufferGetBaseAddressOfPlane(pb, 0) };
-    let uv_base = unsafe { CVPixelBufferGetBaseAddressOfPlane(pb, 1) };
+    let y_stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0);
+    let y_rows = CVPixelBufferGetHeightOfPlane(pb, 0);
+    let uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 1);
+    let uv_rows = CVPixelBufferGetHeightOfPlane(pb, 1);
+    let y_base = CVPixelBufferGetBaseAddressOfPlane(pb, 0);
+    let uv_base = CVPixelBufferGetBaseAddressOfPlane(pb, 1);
     if y_base.is_null() || uv_base.is_null() || y_stride == 0 || y_stride != uv_stride {
         return None;
     }
@@ -273,8 +273,8 @@ fn copy_biplanar_nv12(pb: &CVPixelBuffer, width: u32, height: u32) -> Option<Fra
 }
 
 fn copy_single_plane_bgra(pb: &CVPixelBuffer, width: u32, height: u32) -> Option<Frame> {
-    let stride = unsafe { CVPixelBufferGetBytesPerRow(pb) };
-    let base = unsafe { CVPixelBufferGetBaseAddress(pb) };
+    let stride = CVPixelBufferGetBytesPerRow(pb);
+    let base = CVPixelBufferGetBaseAddress(pb);
     if base.is_null() || stride == 0 || height == 0 {
         return None;
     }
