@@ -11,12 +11,19 @@ use crate::error::Error;
 use crate::types::{Frame, FrameQuality, PixelFormat};
 use bytes::Bytes;
 use objc2::rc::Retained;
-use objc2_core_foundation::{CFDictionary, CFMutableDictionary, CFNumber, CFRetained, CFString};
-use objc2_core_media::{CMBlockBuffer, CMFormatDescription, CMSampleBuffer, CMTime, CMTimeFlags};
+use objc2_core_foundation::{
+    CFDictionary, CFMutableDictionary, CFNumber, CFRetained, CFString, kCFAllocatorDefault,
+};
+use objc2_core_media::{
+    CMBlockBuffer, CMBlockBufferCreateWithMemoryBlock, CMFormatDescription, CMSampleBuffer,
+    CMSampleBufferCreate, CMTime, CMTimeFlags, CMVideoFormatDescriptionCreateFromH264ParameterSets,
+    CMVideoFormatDescriptionCreateFromHEVCParameterSets,
+};
 use objc2_core_video::{
-    CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
-    CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
-    CVPixelBufferUnlockBaseAddress, kCVPixelBufferPixelFormatTypeKey, kCVPixelFormatType_32BGRA,
+    CVImageBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
+    CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress, kCVPixelBufferPixelFormatTypeKey,
+    kCVPixelFormatType_32BGRA,
 };
 use objc2_video_toolbox::{
     VTDecodeFrameFlags, VTDecodeInfoFlags, VTDecompressionOutputCallbackRecord,
@@ -51,7 +58,7 @@ impl VideoDecoder for VideoToolboxDecoder {
         let output = Arc::new(Mutex::new(OutputQueue::default()));
         let attrs = build_destination_attributes();
 
-        let mut callback = VTDecompressionOutputCallbackRecord {
+        let callback = VTDecompressionOutputCallbackRecord {
             decompressionOutputCallback: Some(output_callback),
             decompressionOutputRefCon: Arc::into_raw(Arc::clone(&output)) as *mut c_void,
         };
@@ -59,15 +66,12 @@ impl VideoDecoder for VideoToolboxDecoder {
         let mut raw_session: *mut VTDecompressionSession = std::ptr::null_mut();
         let status = unsafe {
             VTDecompressionSessionCreate(
-                std::ptr::null(),
-                &*format_desc,
-                std::ptr::null(),
-                attrs
-                    .as_ref()
-                    .map(|a| a.as_ref() as *const _)
-                    .unwrap_or(std::ptr::null()),
+                None,
+                &format_desc,
+                None,
+                attrs.as_deref(),
                 &callback,
-                &mut raw_session,
+                NonNull::from(&mut raw_session),
             )
         };
         if status != 0 || raw_session.is_null() {
@@ -100,11 +104,11 @@ impl VideoDecoder for VideoToolboxDecoder {
         let mut info_flags = VTDecodeInfoFlags::empty();
         let status = unsafe {
             VTDecompressionSessionDecodeFrame(
-                &*self.session,
-                &*sample,
+                &self.session,
+                &sample,
                 VTDecodeFrameFlags::empty(),
                 std::ptr::null_mut(),
-                &mut info_flags,
+                NonNull::from(&mut info_flags),
             )
         };
         if status != 0 {
@@ -127,16 +131,16 @@ impl VideoDecoder for VideoToolboxDecoder {
 
 impl Drop for VideoToolboxDecoder {
     fn drop(&mut self) {
-        unsafe { VTDecompressionSessionInvalidate(&*self.session) };
+        unsafe { VTDecompressionSessionInvalidate(&self.session) };
     }
 }
 
-extern "C" fn output_callback(
+unsafe extern "C-unwind" fn output_callback(
     refcon: *mut c_void,
     _source_frame_refcon: *mut c_void,
     status: i32,
     _info_flags: VTDecodeInfoFlags,
-    image_buffer: *mut objc2_core_video::CVImageBuffer,
+    image_buffer: *mut CVImageBuffer,
     _presentation_timestamp: CMTime,
     _presentation_duration: CMTime,
 ) {
@@ -154,16 +158,13 @@ extern "C" fn output_callback(
         }
         return;
     }
-    let pixel_buffer = unsafe { &*image_buffer };
+    let pixel_buffer = unsafe { &*(image_buffer as *const CVPixelBuffer) };
     if let Some(frame) = pixel_buffer_to_frame(pixel_buffer) {
         guard.frames.push(frame);
     }
 }
 
-fn pixel_buffer_to_frame(pixel_buffer: &objc2_core_video::CVImageBuffer) -> Option<Frame> {
-    let pb: &objc2_core_video::CVPixelBuffer =
-        unsafe { &*(pixel_buffer as *const _ as *const objc2_core_video::CVPixelBuffer) };
-
+fn pixel_buffer_to_frame(pb: &CVPixelBuffer) -> Option<Frame> {
     unsafe {
         CVPixelBufferLockBaseAddress(pb, CVPixelBufferLockFlags::ReadOnly);
     }
@@ -195,18 +196,18 @@ fn pixel_buffer_to_frame(pixel_buffer: &objc2_core_video::CVImageBuffer) -> Opti
     })
 }
 
-fn build_destination_attributes() -> Option<CFRetained<CFMutableDictionary>> {
+fn build_destination_attributes() -> Option<CFRetained<CFDictionary>> {
     let dict = CFMutableDictionary::new();
-    let key = unsafe { kCVPixelBufferPixelFormatTypeKey }?;
+    let key: &CFString = unsafe { kCVPixelBufferPixelFormatTypeKey };
     let value = CFNumber::new_i32(kCVPixelFormatType_32BGRA as i32);
     unsafe {
         CFDictionary::set_value(
-            dict.as_opaque(),
-            key.as_ref() as *const _ as *const c_void,
-            value.as_ref() as *const _ as *const c_void,
+            &dict,
+            key as *const CFString as *const c_void,
+            &*value as *const CFNumber as *const c_void,
         );
     }
-    Some(dict)
+    Some(dict.into())
 }
 
 fn build_format_description(
@@ -217,31 +218,46 @@ fn build_format_description(
         VideoCodec::H264 => parse_avcc(extradata)?,
         VideoCodec::H265 => parse_hvcc(extradata)?,
     };
-    let pointers: Vec<*const u8> = parameter_sets.iter().map(|s| s.as_ptr()).collect();
-    let mut format_desc: *mut CMFormatDescription = std::ptr::null_mut();
+    let pointers: Vec<NonNull<u8>> = parameter_sets
+        .iter()
+        .filter_map(|set| NonNull::new(set.as_ptr() as *mut u8))
+        .collect();
+    if pointers.len() != parameter_sets.len() {
+        return Err(Error::Backend {
+            platform: "macos",
+            message: "parameter set had null pointer".into(),
+        });
+    }
+    let pointers_nn =
+        NonNull::new(pointers.as_ptr() as *mut NonNull<u8>).ok_or(Error::Backend {
+            platform: "macos",
+            message: "empty parameter set list".into(),
+        })?;
+    let sizes_nn = NonNull::new(sizes.as_ptr() as *mut usize).ok_or(Error::Backend {
+        platform: "macos",
+        message: "empty sizes list".into(),
+    })?;
+
+    let mut format_desc: *const CMFormatDescription = std::ptr::null();
     let status = unsafe {
         match codec {
-            VideoCodec::H264 => {
-                objc2_core_media::CMVideoFormatDescriptionCreateFromH264ParameterSets(
-                    std::ptr::null(),
-                    pointers.len(),
-                    pointers.as_ptr(),
-                    sizes.as_ptr(),
-                    NAL_LENGTH_SIZE,
-                    &mut format_desc,
-                )
-            }
-            VideoCodec::H265 => {
-                objc2_core_media::CMVideoFormatDescriptionCreateFromHEVCParameterSets(
-                    std::ptr::null(),
-                    pointers.len(),
-                    pointers.as_ptr(),
-                    sizes.as_ptr(),
-                    NAL_LENGTH_SIZE,
-                    std::ptr::null(),
-                    &mut format_desc,
-                )
-            }
+            VideoCodec::H264 => CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                None,
+                pointers.len(),
+                pointers_nn,
+                sizes_nn,
+                NAL_LENGTH_SIZE,
+                NonNull::from(&mut format_desc),
+            ),
+            VideoCodec::H265 => CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                None,
+                pointers.len(),
+                pointers_nn,
+                sizes_nn,
+                NAL_LENGTH_SIZE,
+                None,
+                NonNull::from(&mut format_desc),
+            ),
         }
     };
     if status != 0 || format_desc.is_null() {
@@ -250,7 +266,7 @@ fn build_format_description(
             message: format!("CMVideoFormatDescriptionCreate failed: {status}"),
         });
     }
-    unsafe { Retained::from_raw(format_desc) }.ok_or(Error::Backend {
+    unsafe { Retained::from_raw(format_desc as *mut CMFormatDescription) }.ok_or(Error::Backend {
         platform: "macos",
         message: "format description returned null".into(),
     })
@@ -353,16 +369,16 @@ fn parse_hvcc(data: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<usize>), Error> {
 fn create_block_buffer(nal: &[u8]) -> Result<Retained<CMBlockBuffer>, Error> {
     let mut raw: *mut CMBlockBuffer = std::ptr::null_mut();
     let status = unsafe {
-        objc2_core_media::CMBlockBufferCreateWithMemoryBlock(
-            std::ptr::null(),
+        CMBlockBufferCreateWithMemoryBlock(
+            None,
             nal.as_ptr() as *mut c_void,
             nal.len(),
-            std::ptr::null(),
+            None,
             std::ptr::null(),
             0,
             nal.len(),
             0,
-            &mut raw,
+            NonNull::from(&mut raw),
         )
     };
     if status != 0 || raw.is_null() {
@@ -385,19 +401,19 @@ fn create_sample_buffer(
     let mut raw: *mut CMSampleBuffer = std::ptr::null_mut();
     let pts = duration_to_cmtime(timestamp);
     let status = unsafe {
-        objc2_core_media::CMSampleBufferCreate(
-            std::ptr::null(),
-            block as *const _ as *mut CMBlockBuffer,
-            true as u8,
+        CMSampleBufferCreate(
             None,
-            std::ptr::null(),
-            format,
+            Some(block),
+            true,
+            None,
+            std::ptr::null_mut(),
+            Some(format),
             1,
             1,
             &pts,
             0,
             std::ptr::null(),
-            &mut raw,
+            NonNull::from(&mut raw),
         )
     };
     if status != 0 || raw.is_null() {
@@ -419,4 +435,9 @@ fn duration_to_cmtime(duration: Duration) -> CMTime {
         flags: CMTimeFlags::Valid,
         epoch: 0,
     }
+}
+
+#[allow(dead_code)]
+fn _allocator_default() -> Option<&'static objc2_core_foundation::CFAllocator> {
+    unsafe { kCFAllocatorDefault }
 }
