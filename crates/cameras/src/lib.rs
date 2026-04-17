@@ -54,7 +54,7 @@
 //! callers who want full control can stick with the core API.
 //!
 //! - [`source`]: a [`CameraSource`] enum that unifies USB and RTSP, plus
-//!   [`open_source`] which dispatches to [`open`] or [`open_rtsp`] automatically.
+//!   [`open_source`] which dispatches to [`open`] or `open_rtsp` automatically.
 //!   Useful for UIs and config files that want a single "where do frames come from"
 //!   value type.
 //! - [`pump`]: a long-running background worker that pulls frames and hands them to a

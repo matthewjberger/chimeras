@@ -90,7 +90,7 @@ pub fn source_label(source: &CameraSource) -> String {
 }
 
 /// Open a camera described by `source`, dispatching to [`open`] or
-/// [`open_rtsp`] as appropriate.
+/// `open_rtsp` as appropriate.
 pub fn open_source(source: CameraSource, config: StreamConfig) -> Result<Camera, Error> {
     match source {
         CameraSource::Usb(device) => open(&device, config),

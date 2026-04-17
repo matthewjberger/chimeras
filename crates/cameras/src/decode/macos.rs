@@ -61,7 +61,7 @@ fn build_destination_attributes() -> Option<CFRetained<CFDictionary>> {
             &pixel_format as *const i32 as *const c_void,
         )
     }?;
-    let number_ref: &CFType = (&*number).as_ref();
+    let number_ref: &CFType = (*number).as_ref();
     let key_ref: &CFString = unsafe { kCVPixelBufferPixelFormatTypeKey };
     let typed: CFRetained<CFDictionary<CFString, CFType>> =
         CFDictionary::from_slices(&[key_ref], &[number_ref]);

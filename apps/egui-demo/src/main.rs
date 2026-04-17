@@ -2,10 +2,12 @@ use std::sync::mpsc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use cameras::Credentials;
 use cameras::analysis;
 use cameras::{
-    CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Credentials, Device,
-    PixelFormat, Rect, Resolution, StreamConfig,
+    CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Device, PixelFormat,
+    Rect, Resolution, StreamConfig,
 };
 use eframe::egui;
 use egui_cameras::{capture_frame, set_active};
@@ -569,6 +571,7 @@ impl eframe::App for App {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn build_rtsp_source(url: &str, username: &str, password: &str) -> Option<CameraSource> {
     let url = url.trim();
     if url.is_empty() {
@@ -589,9 +592,15 @@ fn build_rtsp_source(url: &str, username: &str, password: &str) -> Option<Camera
     })
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn build_rtsp_source(_url: &str, _username: &str, _password: &str) -> Option<CameraSource> {
+    None
+}
+
 fn source_label(source: &CameraSource) -> String {
     match source {
         CameraSource::Usb(device) => device.name.clone(),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         CameraSource::Rtsp { url, .. } => url.clone(),
     }
 }

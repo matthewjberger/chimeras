@@ -1,10 +1,12 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use cameras::Credentials;
 use cameras::analysis;
 use cameras::{
-    CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Credentials, Device,
-    PixelFormat, Rect, Resolution, StreamConfig,
+    CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Device, PixelFormat,
+    Rect, Resolution, StreamConfig,
 };
 use dioxus::prelude::*;
 use dioxus_cameras::{
@@ -1009,6 +1011,7 @@ fn bool_row(value: Option<bool>) -> (bool, String) {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn build_rtsp_source(url: &str, username: &str, password: &str) -> Option<CameraSource> {
     let url = url.trim();
     if url.is_empty() {
@@ -1027,4 +1030,9 @@ fn build_rtsp_source(url: &str, username: &str, password: &str) -> Option<Camera
         url: url.to_string(),
         credentials,
     })
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn build_rtsp_source(_url: &str, _username: &str, _password: &str) -> Option<CameraSource> {
+    None
 }

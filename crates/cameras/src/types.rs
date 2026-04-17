@@ -42,7 +42,7 @@ pub enum Transport {
 
 /// Credentials for authenticating to a network camera.
 ///
-/// Passed to [`crate::open_rtsp`] separately from the URL so the URL can be
+/// Passed to `crate::open_rtsp` separately from the URL so the URL can be
 /// logged or stored safely without leaking the password.
 #[derive(Clone, Debug)]
 pub struct Credentials {

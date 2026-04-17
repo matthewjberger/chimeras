@@ -18,31 +18,52 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.os }}
+
       - name: install just
-        uses: extractions/setup-just@v2
+        run: cargo install just --locked
 
       - name: install linux system deps
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libv4l-dev libclang-dev clang
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ${{ matrix.os }}
+          sudo apt-get install -y \
+            libv4l-dev \
+            libclang-dev \
+            clang \
+            pkg-config \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
 
       - name: format
         run: just format-check
 
-      - name: check
-        run: just check-lib
+      - name: check (workspace, all features)
+        run: cargo check --workspace --all-targets --all-features
 
-      - name: lint
-        run: just lint-lib
+      - name: clippy (workspace, all features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: test (workspace, all features)
+        run: cargo test --workspace --all-features
+
+      - name: rustdoc (cameras)
+        run: just doc
+
+      - name: rustdoc (dioxus-cameras)
+        run: just doc-dx
+
+      - name: rustdoc (egui-cameras)
+        run: just doc-egui

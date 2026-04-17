@@ -361,7 +361,7 @@ impl BackendControls for Driver {
             if description_is_unavailable(description) {
                 continue;
             }
-            let Ok(control) = device.control(description) else {
+            let Ok(control) = device.control(description.id) else {
                 continue;
             };
             populate_control_value(&mut result, description.id, &control.value);

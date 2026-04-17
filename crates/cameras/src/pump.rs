@@ -44,7 +44,7 @@ const MAX_BACKOFF_SHIFT: u32 = 20;
 /// Policy controlling automatic RTSP session re-establishment by a pump.
 ///
 /// Applies only when a pump is created via [`spawn_with_policy`] with an
-/// [`CameraSource::Rtsp`] source. USB sources ignore the policy — their
+/// `CameraSource::Rtsp` source. USB sources ignore the policy — their
 /// hotplug monitor handles device-loss.
 #[derive(Clone, Debug)]
 #[non_exhaustive]

@@ -18,20 +18,20 @@ pub(crate) enum Handle {
     /// Handle from an OS camera backend (AVFoundation, Media Foundation, V4L2).
     Native(#[expect(dead_code)] NativeHandle),
     /// Handle from the RTSP network backend.
-    #[cfg(feature = "rtsp")]
+    #[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]
     Rtsp(#[expect(dead_code)] crate::rtsp::SessionHandle),
 }
 
 /// An open, streaming camera.
 ///
-/// Obtained from [`crate::open`] for USB cameras or [`crate::open_rtsp`] for network
+/// Obtained from [`crate::open`] for USB cameras or `crate::open_rtsp` for network
 /// cameras. Holds a worker that continuously pushes frames into a bounded channel; read
 /// them with [`next_frame`] or [`try_next_frame`]. Dropping the `Camera` stops the
 /// stream and releases the underlying session.
 pub struct Camera {
     /// The configuration actually applied to the stream.
     ///
-    /// May differ from what was passed to [`crate::open`] / [`crate::open_rtsp`] if the
+    /// May differ from what was passed to [`crate::open`] / `crate::open_rtsp` if the
     /// source rounded the resolution or framerate.
     pub config: StreamConfig,
     pub(crate) frame_rx: Receiver<Result<Frame, Error>>,
