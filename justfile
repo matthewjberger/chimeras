@@ -108,6 +108,10 @@ run-pump:
 run-monitor:
   cargo run -p cameras --example monitor
 
+# Collect a short burst from the first camera and save the sharpest frame.
+run-sharpest path="sharpest.png":
+  cargo run -p cameras --features analysis --example sharpest -- {{path}}
+
 # Run mediamtx in the foreground to host rtsp://127.0.0.1:8554. Run this
 # in one terminal, then `just rtsp-publish PATH` in another to push an
 # MP4 into it. Requires mediamtx on PATH.

@@ -157,6 +157,28 @@ fn drive(camera: cameras::Camera) {
 
 Pause eliminates Rust-side per-frame work. The OS camera pipeline keeps running. See the `pump` module docs for the full trade-off.
 
+### `cameras::analysis`: blur variance and sharpest-of-burst (feature: `analysis`)
+
+Enable the `analysis` feature for pure-function helpers over `Frame`:
+
+- `blur_variance(&Frame) -> f32`: 3×3 Laplacian variance as a relative sharpness score.
+- `blur_variance_in(&Frame, Rect) -> f32`: same, restricted to a region of interest.
+- `blur_variance_subsampled(&Frame, stride) -> f32`: fast subsampled variant for real-time gating.
+- `Ring` + `ring_push` + `take_sharpest`: collect a burst of recent frames and pick the sharpest.
+
+```toml
+[dependencies]
+cameras = { version = "0.1", features = ["analysis"] }
+```
+
+```rust
+use cameras::analysis;
+
+let variance = analysis::blur_variance(&frame);
+```
+
+Scores are relative; calibrate thresholds per camera and lighting condition. The `examples/sharpest.rs` example (runnable via `just run-sharpest`) collects a short burst and saves the sharpest frame to a PNG.
+
 ## Dioxus integration
 
 If you are building a Dioxus app, see the companion crate [`dioxus-cameras`](dioxus-cameras/), which provides:

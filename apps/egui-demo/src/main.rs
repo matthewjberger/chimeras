@@ -1,7 +1,14 @@
+use std::thread::sleep;
+use std::time::Duration;
+
+use cameras::analysis;
 use cameras::{CameraSource, Credentials, Device, PixelFormat, Resolution, StreamConfig};
 use eframe::egui;
 use egui_cameras::{capture_frame, set_active};
 use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
+
+const SHARPEST_BURST_SIZE: usize = 16;
+const SHARPEST_BURST_INTERVAL: Duration = Duration::from_millis(30);
 
 const STREAM_CONFIG: StreamConfig = StreamConfig {
     resolution: Resolution {
@@ -116,9 +123,52 @@ impl App {
             self.last_capture = Some("Capture failed".into());
             return;
         };
+        let variance = analysis::blur_variance(&frame);
         let path = format!("snapshot-{}.png", unix_timestamp());
         match save_png(&frame, &path) {
-            Ok(()) => self.last_capture = Some(format!("Wrote {path}")),
+            Ok(()) => self.last_capture = Some(format!("Wrote {path} (sharpness {variance:.1})")),
+            Err(error) => self.last_capture = Some(format!("Save failed: {error}")),
+        }
+    }
+
+    fn analyze_frame(&mut self) {
+        let Some(stream) = &self.stream else {
+            return;
+        };
+        let Some(frame) = capture_frame(&stream.pump) else {
+            self.last_capture = Some("Capture failed".into());
+            return;
+        };
+        let variance = analysis::blur_variance(&frame);
+        self.last_capture = Some(format!(
+            "Current frame sharpness: {variance:.1} (higher = sharper; calibrate per source)"
+        ));
+    }
+
+    fn pick_sharpest(&mut self) {
+        let Some(stream) = &self.stream else {
+            return;
+        };
+        let mut ring = analysis::ring_new(SHARPEST_BURST_SIZE);
+        for _ in 0..SHARPEST_BURST_SIZE {
+            if let Some(frame) = capture_frame(&stream.pump) {
+                analysis::ring_push(&mut ring, frame);
+            }
+            sleep(SHARPEST_BURST_INTERVAL);
+        }
+        let Some(sharpest) = analysis::take_sharpest(&ring) else {
+            self.last_capture = Some("Burst captured no frames".into());
+            return;
+        };
+        let variance = analysis::blur_variance(&sharpest);
+        let path = format!("sharpest-{}.png", unix_timestamp());
+        match save_png(&sharpest, &path) {
+            Ok(()) => {
+                self.last_capture = Some(format!(
+                    "Wrote {path} (sharpness {variance:.1}, best of {})",
+                    ring.frames.len()
+                ))
+            }
             Err(error) => self.last_capture = Some(format!("Save failed: {error}")),
         }
     }
@@ -211,6 +261,15 @@ impl eframe::App for App {
                     }
                     if ui.button("Take picture").clicked() {
                         self.snapshot();
+                    }
+                    if ui.button("Analyze sharpness").clicked() {
+                        self.analyze_frame();
+                    }
+                    if ui
+                        .button(format!("Pick sharpest ({SHARPEST_BURST_SIZE}-frame burst)"))
+                        .clicked()
+                    {
+                        self.pick_sharpest();
                     }
                 });
             });

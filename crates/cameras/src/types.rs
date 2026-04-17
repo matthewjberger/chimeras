@@ -176,6 +176,23 @@ pub struct Frame {
     pub plane_secondary: Bytes,
 }
 
+/// Axis-aligned rectangle in pixel coordinates.
+///
+/// Used to describe regions of interest for analysis helpers like
+/// [`crate::analysis::blur_variance_in`]. Origin is the top-left of the frame.
+#[cfg(feature = "analysis")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Rect {
+    /// Left edge in pixels from the frame's left side.
+    pub x: u32,
+    /// Top edge in pixels from the frame's top.
+    pub y: u32,
+    /// Width of the rectangle in pixels.
+    pub width: u32,
+    /// Height of the rectangle in pixels.
+    pub height: u32,
+}
+
 /// Events emitted by the hotplug [`crate::DeviceMonitor`].
 #[derive(Clone, Debug)]
 pub enum DeviceEvent {

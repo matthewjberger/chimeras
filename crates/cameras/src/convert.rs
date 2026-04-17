@@ -182,3 +182,104 @@ fn mjpeg_to_rgb(data: &[u8]) -> Result<Vec<u8>, Error> {
         .decode()
         .map_err(|error| Error::MjpegDecode(error.to_string()))
 }
+
+#[cfg(feature = "analysis")]
+pub(crate) fn to_luma8(frame: &Frame) -> Vec<u8> {
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    let stride = frame.stride as usize;
+    match frame.pixel_format {
+        PixelFormat::Rgb8 => rgb_to_luma(&frame.plane_primary),
+        PixelFormat::Rgba8 => rgba_to_luma(&frame.plane_primary),
+        PixelFormat::Bgra8 => bgra_to_luma(&frame.plane_primary, width, height, stride),
+        PixelFormat::Yuyv => yuyv_to_luma(&frame.plane_primary, width, height, stride),
+        PixelFormat::Nv12 => nv12_y_to_luma(&frame.plane_primary, width, height, stride),
+        PixelFormat::Mjpeg => mjpeg_to_rgb(&frame.plane_primary)
+            .map(|rgb| rgb_to_luma(&rgb))
+            .unwrap_or_default(),
+    }
+}
+
+#[cfg(feature = "analysis")]
+const LUMA_WEIGHT_RED: u32 = 299;
+#[cfg(feature = "analysis")]
+const LUMA_WEIGHT_GREEN: u32 = 587;
+#[cfg(feature = "analysis")]
+const LUMA_WEIGHT_BLUE: u32 = 114;
+
+#[cfg(feature = "analysis")]
+fn rec601_luma(red: u8, green: u8, blue: u8) -> u8 {
+    let weighted = LUMA_WEIGHT_RED * red as u32
+        + LUMA_WEIGHT_GREEN * green as u32
+        + LUMA_WEIGHT_BLUE * blue as u32;
+    (weighted / 1000) as u8
+}
+
+#[cfg(feature = "analysis")]
+fn rgb_to_luma(data: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(data.len() / 3);
+    for pixel in data.chunks_exact(3) {
+        output.push(rec601_luma(pixel[0], pixel[1], pixel[2]));
+    }
+    output
+}
+
+#[cfg(feature = "analysis")]
+fn rgba_to_luma(data: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(data.len() / 4);
+    for pixel in data.chunks_exact(4) {
+        output.push(rec601_luma(pixel[0], pixel[1], pixel[2]));
+    }
+    output
+}
+
+#[cfg(feature = "analysis")]
+fn bgra_to_luma(data: &[u8], width: usize, height: usize, stride: usize) -> Vec<u8> {
+    let effective_stride = if stride == 0 { width * 4 } else { stride };
+    let rows_available = data.len().checked_div(effective_stride).unwrap_or(0);
+    let rows = height.min(rows_available);
+    let row_bytes_wanted = width * 4;
+    let mut output = Vec::with_capacity(rows * width);
+    for row in 0..rows {
+        let offset = row * effective_stride;
+        let end = offset.saturating_add(row_bytes_wanted).min(data.len());
+        let row_bytes = &data[offset..end];
+        for pixel in row_bytes.chunks_exact(4) {
+            output.push(rec601_luma(pixel[2], pixel[1], pixel[0]));
+        }
+    }
+    output
+}
+
+#[cfg(feature = "analysis")]
+fn yuyv_to_luma(data: &[u8], width: usize, height: usize, stride: usize) -> Vec<u8> {
+    let row_bytes = width * 2;
+    let effective_stride = if stride == 0 { row_bytes } else { stride };
+    let rows_available = data.len().checked_div(effective_stride).unwrap_or(0);
+    let rows = height.min(rows_available);
+    let mut output = Vec::with_capacity(rows * width);
+    for row in 0..rows {
+        let start = row * effective_stride;
+        let end = start.saturating_add(row_bytes).min(data.len());
+        let row_slice = &data[start..end];
+        for pair in row_slice.chunks_exact(4) {
+            output.push(pair[0]);
+            output.push(pair[2]);
+        }
+    }
+    output
+}
+
+#[cfg(feature = "analysis")]
+fn nv12_y_to_luma(y_plane: &[u8], width: usize, height: usize, stride: usize) -> Vec<u8> {
+    let y_stride = if stride == 0 { width } else { stride };
+    let rows_available = y_plane.len().checked_div(y_stride).unwrap_or(0);
+    let rows = height.min(rows_available);
+    let mut output = Vec::with_capacity(rows * width);
+    for row in 0..rows {
+        let start = row * y_stride;
+        let end = start.saturating_add(width).min(y_plane.len());
+        output.extend_from_slice(&y_plane[start..end]);
+    }
+    output
+}

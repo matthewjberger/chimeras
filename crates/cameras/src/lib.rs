@@ -63,6 +63,9 @@
 //!   while paused), and [`pump::stop_and_join`] (deterministic teardown). This is the
 //!   primitive higher-level integrations (for example, the `dioxus-cameras` hook) are
 //!   built on.
+//! - `analysis` (feature-gated, see [`analysis`]): blur-variance sharpness metrics
+//!   and a small [`analysis::Ring`] for "take the sharpest frame of the last N"
+//!   capture flows. Scores are relative; calibrate thresholds per camera.
 //!
 //! # Design
 //!
@@ -90,6 +93,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "analysis")]
+pub mod analysis;
 pub mod backend;
 pub mod camera;
 pub mod convert;
@@ -129,6 +134,8 @@ pub use convert::{to_rgb8, to_rgba8};
 pub use error::Error;
 pub use monitor::{DeviceMonitor, next_event, try_next_event};
 pub use source::{CameraSource, open_source, source_label};
+#[cfg(feature = "analysis")]
+pub use types::Rect;
 pub use types::{
     Capabilities, Credentials, Device, DeviceEvent, DeviceId, FormatDescriptor, Frame,
     FrameQuality, FramerateRange, PixelFormat, Position, Resolution, StreamConfig, Transport,

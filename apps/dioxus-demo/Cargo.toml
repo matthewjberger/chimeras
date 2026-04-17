@@ -5,6 +5,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cameras = { path = "../../crates/cameras", features = ["rtsp"] }
+cameras = { path = "../../crates/cameras", features = ["rtsp", "analysis"] }
 dioxus-cameras = { path = "../../crates/dioxus-cameras", features = ["rtsp"] }
 dioxus = { version = "0.7", features = ["desktop"] }

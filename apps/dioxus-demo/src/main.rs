@@ -1,3 +1,4 @@
+use cameras::analysis;
 use cameras::{CameraSource, Credentials, PixelFormat, Resolution, StreamConfig};
 use dioxus::prelude::*;
 use dioxus_cameras::{
@@ -108,9 +109,23 @@ fn StreamCell(id: u32, streams: UseStreams, devices: UseDevices) -> Element {
 
     let take_picture = move |_| match stream.capture_frame.call(()) {
         Some(frame) => {
-            last_capture
-                .clone()
-                .set(format!("Captured {}x{}", frame.width, frame.height));
+            let variance = analysis::blur_variance(&frame);
+            last_capture.clone().set(format!(
+                "Captured {}x{} (sharpness {variance:.1})",
+                frame.width, frame.height
+            ));
+        }
+        None => {
+            last_capture.clone().set("Capture failed".into());
+        }
+    };
+
+    let analyze_sharpness = move |_| match stream.capture_frame.call(()) {
+        Some(frame) => {
+            let variance = analysis::blur_variance(&frame);
+            last_capture.clone().set(format!(
+                "Sharpness {variance:.1} (relative, calibrate per source)"
+            ));
         }
         None => {
             last_capture.clone().set("Capture failed".into());
@@ -229,6 +244,11 @@ fn StreamCell(id: u32, streams: UseStreams, devices: UseDevices) -> Element {
                         class: "btn btn-primary",
                         onclick: take_picture,
                         "Take picture"
+                    }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: analyze_sharpness,
+                        "Analyze sharpness"
                     }
                     span { class: "stream-cell-status", "Last capture: {last_capture}" }
                 }
