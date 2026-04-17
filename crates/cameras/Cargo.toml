@@ -84,3 +84,7 @@ name = "monitor"
 [[example]]
 name = "sharpest"
 required-features = ["analysis"]
+
+[[example]]
+name = "autofocus"
+required-features = ["analysis", "controls"]

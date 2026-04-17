@@ -112,6 +112,10 @@ run-monitor:
 run-sharpest path="sharpest.png":
   cargo run -p cameras --features analysis --example sharpest -- {{path}}
 
+# Contrast-detection autofocus sweep on the first camera that has focus control.
+run-autofocus:
+  cargo run -p cameras --features "analysis,controls" --example autofocus
+
 # Run mediamtx in the foreground to host rtsp://127.0.0.1:8554. Run this
 # in one terminal, then `just rtsp-publish PATH` in another to push an
 # MP4 into it. Requires mediamtx on PATH.
