@@ -211,3 +211,149 @@ pub enum DeviceEvent {
     /// A previously-known device disappeared.
     Removed(DeviceId),
 }
+
+/// AC mains frequency choice for cameras that support power-line-frequency filtering.
+///
+/// Supported on Linux via `V4L2_CID_POWER_LINE_FREQUENCY` and on Windows via
+/// `IAMVideoProcAmp`'s `VideoProcAmp_PowerLineFrequency` property (id `10`).
+/// macOS reports [`None`] for this capability — AVFoundation does not expose it.
+#[cfg(feature = "controls")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PowerLineFrequency {
+    /// Flicker-suppression disabled.
+    Disabled,
+    /// 50 Hz mains.
+    Hz50,
+    /// 60 Hz mains.
+    Hz60,
+    /// Hardware auto-detects mains frequency.
+    Auto,
+}
+
+/// Requested tweaks to a device's runtime controls.
+///
+/// Each field uses [`Option::None`] to mean "leave the current value alone"
+/// and [`Option::Some`] to mean "apply this value." Values are in each
+/// platform's native range; consult [`ControlCapabilities`] for the exact
+/// endpoints before writing.
+///
+/// Platforms reject out-of-range or unsupported writes with
+/// [`crate::Error::Unsupported`].
+#[cfg(feature = "controls")]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Controls {
+    /// Manual focus position. See [`ControlCapabilities::focus`] for range semantics.
+    pub focus: Option<f32>,
+    /// Enable (`true`) or disable (`false`) continuous auto-focus.
+    pub auto_focus: Option<bool>,
+    /// Manual exposure value in each platform's native unit (seconds on macOS, microseconds on Linux).
+    pub exposure: Option<f32>,
+    /// Enable (`true`) or disable (`false`) auto-exposure. Read-back collapses V4L2 priority modes (shutter/aperture priority) into `Some(true)`; write-back of `Some(true)` applies full AUTO (value 0).
+    pub auto_exposure: Option<bool>,
+    /// Manual white-balance temperature (Kelvin on Linux, synthesized via gains round-trip on macOS).
+    pub white_balance_temperature: Option<f32>,
+    /// Enable (`true`) or disable (`false`) auto white balance.
+    pub auto_white_balance: Option<bool>,
+    /// Image brightness in native units.
+    pub brightness: Option<f32>,
+    /// Image contrast in native units.
+    pub contrast: Option<f32>,
+    /// Image saturation in native units.
+    pub saturation: Option<f32>,
+    /// Image sharpness in native units.
+    pub sharpness: Option<f32>,
+    /// Sensor gain in native units (ISO on macOS).
+    pub gain: Option<f32>,
+    /// Backlight compensation in native units.
+    pub backlight_compensation: Option<f32>,
+    /// AC power-line frequency for flicker suppression.
+    pub power_line_frequency: Option<PowerLineFrequency>,
+    /// Pan axis in native units. PTZ-capable devices only.
+    pub pan: Option<f32>,
+    /// Tilt axis in native units. PTZ-capable devices only.
+    pub tilt: Option<f32>,
+    /// Zoom factor in native units. PTZ-capable devices only.
+    pub zoom: Option<f32>,
+}
+
+/// Reported range for one numeric camera control.
+///
+/// All fields are in the platform's native unit for the control — do not
+/// assume a normalized 0..1 scale. Read endpoints from this struct before
+/// constructing [`Controls`] values.
+#[cfg(feature = "controls")]
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ControlRange {
+    /// Minimum accepted value, inclusive.
+    pub min: f32,
+    /// Maximum accepted value, inclusive.
+    pub max: f32,
+    /// Smallest step between accepted values. `0.0` means continuous.
+    pub step: f32,
+    /// Factory default value.
+    pub default: f32,
+}
+
+/// Power-line-frequency capability detail on devices that expose it.
+#[cfg(feature = "controls")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct PowerLineFrequencyCapability {
+    /// `true` if 50 Hz filtering is selectable on this device.
+    pub hz50: bool,
+    /// `true` if 60 Hz filtering is selectable on this device.
+    pub hz60: bool,
+    /// `true` if the "off" mode is selectable on this device.
+    pub disabled: bool,
+    /// `true` if hardware auto-detect mode is selectable on this device.
+    pub auto: bool,
+    /// Factory default mode.
+    pub default: PowerLineFrequency,
+}
+
+/// What a device reports it can do, per control.
+///
+/// Each field is [`Some`] when the platform exposes the control on this
+/// device and [`None`] when it does not. For numeric controls, `Some` carries
+/// the native [`ControlRange`]. For auto toggles, `Some(true)` means the
+/// device supports auto, `Some(false)` means manual-only, `None` means no
+/// auto control.
+#[cfg(feature = "controls")]
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ControlCapabilities {
+    /// Focus-position capability.
+    pub focus: Option<ControlRange>,
+    /// Auto-focus toggle capability.
+    pub auto_focus: Option<bool>,
+    /// Exposure-value capability.
+    pub exposure: Option<ControlRange>,
+    /// Auto-exposure toggle capability.
+    pub auto_exposure: Option<bool>,
+    /// White-balance-temperature capability.
+    pub white_balance_temperature: Option<ControlRange>,
+    /// Auto-white-balance toggle capability.
+    pub auto_white_balance: Option<bool>,
+    /// Brightness capability.
+    pub brightness: Option<ControlRange>,
+    /// Contrast capability.
+    pub contrast: Option<ControlRange>,
+    /// Saturation capability.
+    pub saturation: Option<ControlRange>,
+    /// Sharpness capability.
+    pub sharpness: Option<ControlRange>,
+    /// Gain capability.
+    pub gain: Option<ControlRange>,
+    /// Backlight-compensation capability.
+    pub backlight_compensation: Option<ControlRange>,
+    /// Power-line-frequency capability.
+    pub power_line_frequency: Option<PowerLineFrequencyCapability>,
+    /// Pan capability.
+    pub pan: Option<ControlRange>,
+    /// Tilt capability.
+    pub tilt: Option<ControlRange>,
+    /// Zoom capability.
+    pub zoom: Option<ControlRange>,
+}

@@ -129,6 +129,8 @@ pub(crate) type ActiveBackend = crate::linux::Driver;
 pub(crate) type ActiveBackend = crate::unknown::Driver;
 
 pub use backend::Backend;
+#[cfg(feature = "controls")]
+pub use backend::BackendControls;
 pub use camera::{Camera, next_frame, try_next_frame};
 pub use convert::{to_rgb8, to_rgba8};
 pub use error::Error;
@@ -139,6 +141,10 @@ pub use types::Rect;
 pub use types::{
     Capabilities, Credentials, Device, DeviceEvent, DeviceId, FormatDescriptor, Frame,
     FrameQuality, FramerateRange, PixelFormat, Position, Resolution, StreamConfig, Transport,
+};
+#[cfg(feature = "controls")]
+pub use types::{
+    ControlCapabilities, ControlRange, Controls, PowerLineFrequency, PowerLineFrequencyCapability,
 };
 
 #[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]
@@ -233,3 +239,31 @@ pub fn best_format(capabilities: &Capabilities, config: &StreamConfig) -> Option
 
 /// A reasonable default timeout for [`next_frame`] when you don't want to hand-pick one.
 pub const DEFAULT_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Report which runtime controls the given device exposes and their native ranges.
+///
+/// Fields on the returned [`ControlCapabilities`] are `None` for controls the
+/// platform / device does not expose. Ranges are in each platform's native
+/// unit — do not assume a normalized scale.
+#[cfg(feature = "controls")]
+pub fn control_capabilities(device: &Device) -> Result<ControlCapabilities, Error> {
+    <ActiveBackend as BackendControls>::control_capabilities(&device.id)
+}
+
+/// Read the current value of every exposed control on `device`.
+///
+/// Fields are `None` for controls the device does not expose. Read-back of
+/// `auto_exposure` collapses V4L2 priority modes into `Some(true)`.
+#[cfg(feature = "controls")]
+pub fn read_controls(device: &Device) -> Result<Controls, Error> {
+    <ActiveBackend as BackendControls>::read_controls(&device.id)
+}
+
+/// Apply every [`Some`]-valued field in `controls` to `device`.
+///
+/// `None` fields are left at their current value. Returns the first platform
+/// failure encountered; does not preflight against [`control_capabilities`].
+#[cfg(feature = "controls")]
+pub fn apply_controls(device: &Device, controls: &Controls) -> Result<(), Error> {
+    <ActiveBackend as BackendControls>::apply_controls(&device.id, controls)
+}

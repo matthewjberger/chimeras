@@ -9,6 +9,8 @@ use crate::camera::Camera;
 use crate::error::Error;
 use crate::monitor::DeviceMonitor;
 use crate::types::{Capabilities, Device, DeviceId, StreamConfig};
+#[cfg(feature = "controls")]
+use crate::types::{ControlCapabilities, Controls};
 
 /// The contract every platform backend implements.
 ///
@@ -28,4 +30,19 @@ pub trait Backend {
     fn open(id: &DeviceId, config: StreamConfig) -> Result<Camera, Error>;
     /// Start a hotplug monitor.
     fn monitor() -> Result<DeviceMonitor, Error>;
+}
+
+/// Feature-gated extension of [`Backend`] exposing camera runtime controls.
+///
+/// Implemented separately so adding controls cannot grow the core [`Backend`]
+/// contract. Future feature-gated backend extensions follow the same pattern
+/// (one sub-trait per feature).
+#[cfg(feature = "controls")]
+pub trait BackendControls: Backend {
+    /// Report which controls this device supports and their native ranges.
+    fn control_capabilities(id: &DeviceId) -> Result<ControlCapabilities, Error>;
+    /// Read the current value of every exposed control.
+    fn read_controls(id: &DeviceId) -> Result<Controls, Error>;
+    /// Apply every [`Some`]-valued field in `controls` to the device.
+    fn apply_controls(id: &DeviceId, controls: &Controls) -> Result<(), Error>;
 }

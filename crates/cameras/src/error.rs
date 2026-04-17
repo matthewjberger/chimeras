@@ -52,4 +52,13 @@ pub enum Error {
         /// Human-readable message from the underlying platform API.
         message: String,
     },
+
+    /// The requested control or capability is not supported on this platform/device.
+    #[error("{platform}: unsupported ({reason})")]
+    Unsupported {
+        /// Name of the platform reporting the unsupported operation.
+        platform: &'static str,
+        /// Short identifier for what is unsupported (control field name, missing interface, or scope phrase).
+        reason: &'static str,
+    },
 }

@@ -33,6 +33,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = []
 rtsp = ["dep:retina", "dep:tokio", "dep:url", "dep:futures-util"]
 analysis = []
+controls = ["windows/Win32_Media_DirectShow"]
 
 [dependencies]
 bytes = "1"
