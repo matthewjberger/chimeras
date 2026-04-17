@@ -313,6 +313,135 @@ pub struct PowerLineFrequencyCapability {
     pub default: PowerLineFrequency,
 }
 
+/// Identifier for every control field on [`Controls`] and [`ControlCapabilities`].
+///
+/// Useful for UI iteration, config serialization, and fetching platform-scoped
+/// caveats via [`ControlKind::caveat`]. Iterate [`ControlKind::ALL`] to visit
+/// every control in a stable order.
+#[cfg(feature = "controls")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ControlKind {
+    /// Manual focus position.
+    Focus,
+    /// Auto-focus toggle.
+    AutoFocus,
+    /// Manual exposure value.
+    Exposure,
+    /// Auto-exposure toggle.
+    AutoExposure,
+    /// Manual white-balance temperature.
+    WhiteBalanceTemperature,
+    /// Auto-white-balance toggle.
+    AutoWhiteBalance,
+    /// Image brightness.
+    Brightness,
+    /// Image contrast.
+    Contrast,
+    /// Image saturation.
+    Saturation,
+    /// Image sharpness.
+    Sharpness,
+    /// Sensor gain (ISO on macOS).
+    Gain,
+    /// Backlight compensation.
+    BacklightCompensation,
+    /// AC mains frequency filtering.
+    PowerLineFrequency,
+    /// Pan axis (PTZ-capable devices only).
+    Pan,
+    /// Tilt axis (PTZ-capable devices only).
+    Tilt,
+    /// Zoom factor (PTZ-capable devices only).
+    Zoom,
+}
+
+#[cfg(feature = "controls")]
+impl ControlKind {
+    /// Every [`ControlKind`] variant in declaration order.
+    pub const ALL: [ControlKind; 16] = [
+        ControlKind::Focus,
+        ControlKind::AutoFocus,
+        ControlKind::Exposure,
+        ControlKind::AutoExposure,
+        ControlKind::WhiteBalanceTemperature,
+        ControlKind::AutoWhiteBalance,
+        ControlKind::Brightness,
+        ControlKind::Contrast,
+        ControlKind::Saturation,
+        ControlKind::Sharpness,
+        ControlKind::Gain,
+        ControlKind::BacklightCompensation,
+        ControlKind::PowerLineFrequency,
+        ControlKind::Pan,
+        ControlKind::Tilt,
+        ControlKind::Zoom,
+    ];
+
+    /// Snake_case name matching the corresponding field on [`Controls`].
+    pub fn label(&self) -> &'static str {
+        match self {
+            ControlKind::Focus => "focus",
+            ControlKind::AutoFocus => "auto_focus",
+            ControlKind::Exposure => "exposure",
+            ControlKind::AutoExposure => "auto_exposure",
+            ControlKind::WhiteBalanceTemperature => "white_balance_temperature",
+            ControlKind::AutoWhiteBalance => "auto_white_balance",
+            ControlKind::Brightness => "brightness",
+            ControlKind::Contrast => "contrast",
+            ControlKind::Saturation => "saturation",
+            ControlKind::Sharpness => "sharpness",
+            ControlKind::Gain => "gain",
+            ControlKind::BacklightCompensation => "backlight_compensation",
+            ControlKind::PowerLineFrequency => "power_line_frequency",
+            ControlKind::Pan => "pan",
+            ControlKind::Tilt => "tilt",
+            ControlKind::Zoom => "zoom",
+        }
+    }
+
+    /// Platform-specific caveat for this control on the current target, if any.
+    ///
+    /// Returns `Some` only when the current target cannot expose the control
+    /// regardless of device — useful as UI tooltip text explaining why a
+    /// capability row is marked unsupported. Currently populated for macOS
+    /// controls that AVFoundation does not surface.
+    pub fn caveat(&self) -> Option<&'static str> {
+        #[cfg(target_os = "macos")]
+        {
+            match self {
+                ControlKind::Brightness
+                | ControlKind::Contrast
+                | ControlKind::Saturation
+                | ControlKind::Sharpness
+                | ControlKind::BacklightCompensation => Some(
+                    "macOS: AVFoundation doesn't expose per-channel image-processing controls. \
+                     Apply CPU/GPU post-processing (shaders, color matrices) over the Frame \
+                     bytes in your app. The library is capture-only.",
+                ),
+                ControlKind::PowerLineFrequency => {
+                    Some("macOS: AVFoundation doesn't expose AC mains frequency filtering.")
+                }
+                ControlKind::Pan | ControlKind::Tilt => Some(
+                    "macOS: AVFoundation doesn't expose pan/tilt controls for built-in or UVC cameras.",
+                ),
+                ControlKind::Focus
+                | ControlKind::AutoFocus
+                | ControlKind::Exposure
+                | ControlKind::AutoExposure
+                | ControlKind::WhiteBalanceTemperature
+                | ControlKind::AutoWhiteBalance
+                | ControlKind::Gain
+                | ControlKind::Zoom => None,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
+}
+
 /// What a device reports it can do, per control.
 ///
 /// Each field is [`Some`] when the platform exposes the control on this

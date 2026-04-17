@@ -144,7 +144,8 @@ pub use types::{
 };
 #[cfg(feature = "controls")]
 pub use types::{
-    ControlCapabilities, ControlRange, Controls, PowerLineFrequency, PowerLineFrequencyCapability,
+    ControlCapabilities, ControlKind, ControlRange, Controls, PowerLineFrequency,
+    PowerLineFrequencyCapability,
 };
 
 #[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]

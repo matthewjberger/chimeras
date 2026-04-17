@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use cameras::analysis;
 use cameras::{
-    CameraSource, ControlCapabilities, ControlRange, Controls, Credentials, Device, PixelFormat,
-    Rect, Resolution, StreamConfig,
+    CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Credentials, Device,
+    PixelFormat, Rect, Resolution, StreamConfig,
 };
 use eframe::egui;
 use egui_cameras::{capture_frame, set_active};
@@ -605,7 +605,7 @@ fn save_png(frame: &cameras::Frame, path: &str) -> Result<(), Box<dyn std::error
 }
 
 const SUPPORTED_MARK: &str = "✓";
-const UNSUPPORTED_MARK: &str = "✗";
+const UNSUPPORTED_MARK: &str = "×";
 
 fn render_capabilities_panel(
     ui: &mut egui::Ui,
@@ -620,51 +620,78 @@ fn render_capabilities_panel(
         ui.label("Connect to a USB camera to view its control capabilities.");
         return;
     };
-    let rows: [(&str, CapabilityDisplay); 16] = [
-        ("focus", CapabilityDisplay::Range(caps.focus.as_ref())),
-        ("auto_focus", CapabilityDisplay::Bool(caps.auto_focus)),
-        ("exposure", CapabilityDisplay::Range(caps.exposure.as_ref())),
-        ("auto_exposure", CapabilityDisplay::Bool(caps.auto_exposure)),
+    let rows: [(ControlKind, CapabilityDisplay); 16] = [
         (
-            "white_balance_temperature",
+            ControlKind::Focus,
+            CapabilityDisplay::Range(caps.focus.as_ref()),
+        ),
+        (
+            ControlKind::AutoFocus,
+            CapabilityDisplay::Bool(caps.auto_focus),
+        ),
+        (
+            ControlKind::Exposure,
+            CapabilityDisplay::Range(caps.exposure.as_ref()),
+        ),
+        (
+            ControlKind::AutoExposure,
+            CapabilityDisplay::Bool(caps.auto_exposure),
+        ),
+        (
+            ControlKind::WhiteBalanceTemperature,
             CapabilityDisplay::Range(caps.white_balance_temperature.as_ref()),
         ),
         (
-            "auto_white_balance",
+            ControlKind::AutoWhiteBalance,
             CapabilityDisplay::Bool(caps.auto_white_balance),
         ),
         (
-            "brightness",
+            ControlKind::Brightness,
             CapabilityDisplay::Range(caps.brightness.as_ref()),
         ),
-        ("contrast", CapabilityDisplay::Range(caps.contrast.as_ref())),
         (
-            "saturation",
+            ControlKind::Contrast,
+            CapabilityDisplay::Range(caps.contrast.as_ref()),
+        ),
+        (
+            ControlKind::Saturation,
             CapabilityDisplay::Range(caps.saturation.as_ref()),
         ),
         (
-            "sharpness",
+            ControlKind::Sharpness,
             CapabilityDisplay::Range(caps.sharpness.as_ref()),
         ),
-        ("gain", CapabilityDisplay::Range(caps.gain.as_ref())),
         (
-            "backlight_compensation",
+            ControlKind::Gain,
+            CapabilityDisplay::Range(caps.gain.as_ref()),
+        ),
+        (
+            ControlKind::BacklightCompensation,
             CapabilityDisplay::Range(caps.backlight_compensation.as_ref()),
         ),
         (
-            "power_line_frequency",
+            ControlKind::PowerLineFrequency,
             CapabilityDisplay::PowerLine(caps.power_line_frequency.is_some()),
         ),
-        ("pan", CapabilityDisplay::Range(caps.pan.as_ref())),
-        ("tilt", CapabilityDisplay::Range(caps.tilt.as_ref())),
-        ("zoom", CapabilityDisplay::Range(caps.zoom.as_ref())),
+        (
+            ControlKind::Pan,
+            CapabilityDisplay::Range(caps.pan.as_ref()),
+        ),
+        (
+            ControlKind::Tilt,
+            CapabilityDisplay::Range(caps.tilt.as_ref()),
+        ),
+        (
+            ControlKind::Zoom,
+            CapabilityDisplay::Range(caps.zoom.as_ref()),
+        ),
     ];
     egui::Grid::new("capabilities_grid")
         .num_columns(3)
         .spacing([10.0, 4.0])
         .show(ui, |ui| {
-            for (label, display) in rows {
-                render_capability_row(ui, label, display);
+            for (key, display) in rows {
+                render_capability_row(ui, key, display);
                 ui.end_row();
             }
         });
@@ -676,7 +703,7 @@ enum CapabilityDisplay<'a> {
     PowerLine(bool),
 }
 
-fn render_capability_row(ui: &mut egui::Ui, label: &str, display: CapabilityDisplay) {
+fn render_capability_row(ui: &mut egui::Ui, key: ControlKind, display: CapabilityDisplay) {
     let green = egui::Color32::from_rgb(80, 200, 120);
     let red = egui::Color32::from_rgb(200, 80, 80);
     let (supported, detail) = match display {
@@ -694,9 +721,22 @@ fn render_capability_row(ui: &mut egui::Ui, label: &str, display: CapabilityDisp
         UNSUPPORTED_MARK
     };
     let mark_color = if supported { green } else { red };
-    ui.colored_label(mark_color, mark);
-    ui.label(label);
-    ui.label(detail);
+    let caveat = if supported { None } else { key.caveat() };
+    let mark_response = ui.colored_label(mark_color, mark);
+    let name_response = ui.label(key.label());
+    let detail_response = ui.label(detail);
+    if let Some(caveat) = caveat {
+        mark_response.on_hover_text(caveat);
+        name_response.on_hover_text(caveat);
+        detail_response.on_hover_text(caveat);
+    }
+}
+
+fn auto_lock_hover(paired_label: &str) -> String {
+    format!(
+        "Disabled because {paired_label} is set to 'auto'. Change {paired_label} to 'leave' or \
+         'manual' to enable this slider."
+    )
 }
 
 fn render_controls_editor(
@@ -712,116 +752,128 @@ fn render_controls_editor(
         .show(ui, |ui| {
             changed |= numeric_slider_row(
                 ui,
-                "focus",
+                ControlKind::Focus,
                 capabilities.focus.as_ref(),
                 current.focus,
                 pending.auto_focus == Some(true),
+                Some(ControlKind::AutoFocus),
                 &mut pending.focus,
             );
             changed |= auto_tri_state_row(
                 ui,
-                "auto_focus",
+                ControlKind::AutoFocus,
                 capabilities.auto_focus,
                 &mut pending.auto_focus,
             );
             changed |= numeric_slider_row(
                 ui,
-                "exposure",
+                ControlKind::Exposure,
                 capabilities.exposure.as_ref(),
                 current.exposure,
                 pending.auto_exposure == Some(true),
+                Some(ControlKind::AutoExposure),
                 &mut pending.exposure,
             );
             changed |= auto_tri_state_row(
                 ui,
-                "auto_exposure",
+                ControlKind::AutoExposure,
                 capabilities.auto_exposure,
                 &mut pending.auto_exposure,
             );
             changed |= numeric_slider_row(
                 ui,
-                "white_balance_temperature",
+                ControlKind::WhiteBalanceTemperature,
                 capabilities.white_balance_temperature.as_ref(),
                 current.white_balance_temperature,
                 pending.auto_white_balance == Some(true),
+                Some(ControlKind::AutoWhiteBalance),
                 &mut pending.white_balance_temperature,
             );
             changed |= auto_tri_state_row(
                 ui,
-                "auto_white_balance",
+                ControlKind::AutoWhiteBalance,
                 capabilities.auto_white_balance,
                 &mut pending.auto_white_balance,
             );
             changed |= numeric_slider_row(
                 ui,
-                "brightness",
+                ControlKind::Brightness,
                 capabilities.brightness.as_ref(),
                 current.brightness,
                 false,
+                None,
                 &mut pending.brightness,
             );
             changed |= numeric_slider_row(
                 ui,
-                "contrast",
+                ControlKind::Contrast,
                 capabilities.contrast.as_ref(),
                 current.contrast,
                 false,
+                None,
                 &mut pending.contrast,
             );
             changed |= numeric_slider_row(
                 ui,
-                "saturation",
+                ControlKind::Saturation,
                 capabilities.saturation.as_ref(),
                 current.saturation,
                 false,
+                None,
                 &mut pending.saturation,
             );
             changed |= numeric_slider_row(
                 ui,
-                "sharpness",
+                ControlKind::Sharpness,
                 capabilities.sharpness.as_ref(),
                 current.sharpness,
                 false,
+                None,
                 &mut pending.sharpness,
             );
             changed |= numeric_slider_row(
                 ui,
-                "gain",
+                ControlKind::Gain,
                 capabilities.gain.as_ref(),
                 current.gain,
                 false,
+                None,
                 &mut pending.gain,
             );
             changed |= numeric_slider_row(
                 ui,
-                "backlight_compensation",
+                ControlKind::BacklightCompensation,
                 capabilities.backlight_compensation.as_ref(),
                 current.backlight_compensation,
                 false,
+                None,
                 &mut pending.backlight_compensation,
             );
             changed |= numeric_slider_row(
                 ui,
-                "pan",
+                ControlKind::Pan,
                 capabilities.pan.as_ref(),
                 current.pan,
                 false,
+                None,
                 &mut pending.pan,
             );
             changed |= numeric_slider_row(
                 ui,
-                "tilt",
+                ControlKind::Tilt,
                 capabilities.tilt.as_ref(),
                 current.tilt,
                 false,
+                None,
                 &mut pending.tilt,
             );
             changed |= numeric_slider_row(
                 ui,
-                "zoom",
+                ControlKind::Zoom,
                 capabilities.zoom.as_ref(),
                 current.zoom,
                 false,
+                None,
                 &mut pending.zoom,
             );
         });
@@ -830,36 +882,47 @@ fn render_controls_editor(
 
 fn numeric_slider_row(
     ui: &mut egui::Ui,
-    label: &str,
+    key: ControlKind,
     range: Option<&ControlRange>,
     current: Option<f32>,
     locked_by_auto: bool,
+    paired_auto: Option<ControlKind>,
     pending: &mut Option<f32>,
 ) -> bool {
     let mut changed = false;
-    ui.label(label);
+    ui.label(key.label());
     match range {
         Some(range) => {
             let fallback_value = current.unwrap_or(range.default);
             ui.horizontal(|ui| {
+                let lock_hover = if locked_by_auto {
+                    paired_auto.map(|auto| auto_lock_hover(auto.label()))
+                } else {
+                    None
+                };
                 let mut enabled = pending.is_some();
                 let checkbox_enabled = !locked_by_auto;
-                if ui
-                    .add_enabled(checkbox_enabled, egui::Checkbox::new(&mut enabled, ""))
-                    .changed()
-                {
+                let checkbox_response =
+                    ui.add_enabled(checkbox_enabled, egui::Checkbox::new(&mut enabled, ""));
+                if checkbox_response.changed() {
                     *pending = if enabled { Some(fallback_value) } else { None };
                     changed = true;
                 }
+                if let Some(hover) = lock_hover.as_deref() {
+                    checkbox_response.on_hover_text(hover);
+                }
                 let slider_enabled = enabled && !locked_by_auto;
                 let mut value = pending.unwrap_or(fallback_value);
-                let response = ui.add_enabled(
+                let slider_response = ui.add_enabled(
                     slider_enabled,
                     egui::Slider::new(&mut value, range.min..=range.max),
                 );
-                if response.changed() {
+                if slider_response.changed() {
                     *pending = Some(value);
                     changed = true;
+                }
+                if let Some(hover) = lock_hover.as_deref() {
+                    slider_response.on_hover_text(hover);
                 }
                 if locked_by_auto {
                     ui.weak("auto on");
@@ -869,7 +932,10 @@ fn numeric_slider_row(
             });
         }
         None => {
-            ui.weak("not supported");
+            let response = ui.weak("not supported");
+            if let Some(caveat) = key.caveat() {
+                response.on_hover_text(caveat);
+            }
         }
     }
     ui.end_row();
@@ -878,13 +944,16 @@ fn numeric_slider_row(
 
 fn auto_tri_state_row(
     ui: &mut egui::Ui,
-    label: &str,
+    key: ControlKind,
     capability: Option<bool>,
     pending: &mut Option<bool>,
 ) -> bool {
-    ui.label(label);
+    ui.label(key.label());
     if capability != Some(true) {
-        ui.weak("not supported");
+        let response = ui.weak("not supported");
+        if let Some(caveat) = key.caveat() {
+            response.on_hover_text(caveat);
+        }
         ui.end_row();
         return false;
     }

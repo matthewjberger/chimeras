@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use cameras::analysis;
 use cameras::{
-    CameraSource, ControlCapabilities, ControlRange, Controls, Credentials, Device, PixelFormat,
-    Rect, Resolution, StreamConfig,
+    CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Credentials, Device,
+    PixelFormat, Rect, Resolution, StreamConfig,
 };
 use dioxus::prelude::*;
 use dioxus_cameras::{
@@ -16,6 +16,13 @@ use futures_timer::Delay;
 const AUTOFOCUS_SETTLE: Duration = Duration::from_millis(150);
 const AUTOFOCUS_SWEEP_STRIDE_MULTIPLIER: f32 = 4.0;
 const AUTOFOCUS_CONTINUOUS_SAMPLES: f32 = 20.0;
+
+fn auto_lock_hover(paired_label: &str) -> String {
+    format!(
+        "Disabled because {paired_label} is set to 'auto'. Change {paired_label} to 'leave' or \
+         'manual' to enable this slider."
+    )
+}
 
 type ApplyRequest = (Device, Controls);
 
@@ -508,45 +515,60 @@ fn render_capabilities_block(
     let Some(caps) = capabilities else {
         return rsx! {};
     };
-    let rows: Vec<(String, String, bool)> = vec![
-        capability_row("focus", range_row(caps.focus.as_ref())),
-        capability_row("auto_focus", bool_row(caps.auto_focus)),
-        capability_row("exposure", range_row(caps.exposure.as_ref())),
-        capability_row("auto_exposure", bool_row(caps.auto_exposure)),
+    let rows: Vec<(ControlKind, bool, String)> = vec![
+        capability_row(ControlKind::Focus, range_row(caps.focus.as_ref())),
+        capability_row(ControlKind::AutoFocus, bool_row(caps.auto_focus)),
+        capability_row(ControlKind::Exposure, range_row(caps.exposure.as_ref())),
+        capability_row(ControlKind::AutoExposure, bool_row(caps.auto_exposure)),
         capability_row(
-            "white_balance_temperature",
+            ControlKind::WhiteBalanceTemperature,
             range_row(caps.white_balance_temperature.as_ref()),
         ),
-        capability_row("auto_white_balance", bool_row(caps.auto_white_balance)),
-        capability_row("brightness", range_row(caps.brightness.as_ref())),
-        capability_row("contrast", range_row(caps.contrast.as_ref())),
-        capability_row("saturation", range_row(caps.saturation.as_ref())),
-        capability_row("sharpness", range_row(caps.sharpness.as_ref())),
-        capability_row("gain", range_row(caps.gain.as_ref())),
         capability_row(
-            "backlight_compensation",
+            ControlKind::AutoWhiteBalance,
+            bool_row(caps.auto_white_balance),
+        ),
+        capability_row(ControlKind::Brightness, range_row(caps.brightness.as_ref())),
+        capability_row(ControlKind::Contrast, range_row(caps.contrast.as_ref())),
+        capability_row(ControlKind::Saturation, range_row(caps.saturation.as_ref())),
+        capability_row(ControlKind::Sharpness, range_row(caps.sharpness.as_ref())),
+        capability_row(ControlKind::Gain, range_row(caps.gain.as_ref())),
+        capability_row(
+            ControlKind::BacklightCompensation,
             range_row(caps.backlight_compensation.as_ref()),
         ),
         capability_row(
-            "power_line_frequency",
+            ControlKind::PowerLineFrequency,
             (caps.power_line_frequency.is_some(), "menu supported".into()),
         ),
-        capability_row("pan", range_row(caps.pan.as_ref())),
-        capability_row("tilt", range_row(caps.tilt.as_ref())),
-        capability_row("zoom", range_row(caps.zoom.as_ref())),
+        capability_row(ControlKind::Pan, range_row(caps.pan.as_ref())),
+        capability_row(ControlKind::Tilt, range_row(caps.tilt.as_ref())),
+        capability_row(ControlKind::Zoom, range_row(caps.zoom.as_ref())),
     ];
     rsx! {
         details { class: "capabilities-details",
             summary { class: "capabilities-summary", "Capabilities" }
             div { class: "stream-cell-capabilities",
-                for (name, detail, supported) in rows {
-                    div { class: "capability-row",
-                        span {
-                            class: if supported { "capability-mark supported" } else { "capability-mark unsupported" },
-                            if supported { "✓" } else { "✗" }
+                for (kind, supported, detail) in rows {
+                    {
+                        let tooltip = if supported {
+                            String::new()
+                        } else {
+                            kind.caveat().unwrap_or("").to_string()
+                        };
+                        let name = kind.label();
+                        rsx! {
+                            div {
+                                class: "capability-row",
+                                title: "{tooltip}",
+                                span {
+                                    class: if supported { "capability-mark supported" } else { "capability-mark unsupported" },
+                                    if supported { "✓" } else { "×" }
+                                }
+                                span { class: "capability-name", "{name}" }
+                                span { class: "capability-detail", "{detail}" }
+                            }
                         }
-                        span { class: "capability-name", "{name}" }
-                        span { class: "capability-detail", "{detail}" }
                     }
                 }
             }
@@ -569,23 +591,27 @@ fn render_controls_block(
             capabilities.focus.as_ref(),
             ControlField::Focus,
             Some(AutoMode::Focus),
+            Some("auto_focus"),
         ),
         (
             "exposure",
             capabilities.exposure.as_ref(),
             ControlField::Exposure,
             Some(AutoMode::Exposure),
+            Some("auto_exposure"),
         ),
         (
             "white_balance_temperature",
             capabilities.white_balance_temperature.as_ref(),
             ControlField::WhiteBalanceTemperature,
             Some(AutoMode::WhiteBalance),
+            Some("auto_white_balance"),
         ),
         (
             "brightness",
             capabilities.brightness.as_ref(),
             ControlField::Brightness,
+            None,
             None,
         ),
         (
@@ -593,11 +619,13 @@ fn render_controls_block(
             capabilities.contrast.as_ref(),
             ControlField::Contrast,
             None,
+            None,
         ),
         (
             "saturation",
             capabilities.saturation.as_ref(),
             ControlField::Saturation,
+            None,
             None,
         ),
         (
@@ -605,17 +633,43 @@ fn render_controls_block(
             capabilities.sharpness.as_ref(),
             ControlField::Sharpness,
             None,
+            None,
         ),
-        ("gain", capabilities.gain.as_ref(), ControlField::Gain, None),
+        (
+            "gain",
+            capabilities.gain.as_ref(),
+            ControlField::Gain,
+            None,
+            None,
+        ),
         (
             "backlight_compensation",
             capabilities.backlight_compensation.as_ref(),
             ControlField::BacklightCompensation,
             None,
+            None,
         ),
-        ("pan", capabilities.pan.as_ref(), ControlField::Pan, None),
-        ("tilt", capabilities.tilt.as_ref(), ControlField::Tilt, None),
-        ("zoom", capabilities.zoom.as_ref(), ControlField::Zoom, None),
+        (
+            "pan",
+            capabilities.pan.as_ref(),
+            ControlField::Pan,
+            None,
+            None,
+        ),
+        (
+            "tilt",
+            capabilities.tilt.as_ref(),
+            ControlField::Tilt,
+            None,
+            None,
+        ),
+        (
+            "zoom",
+            capabilities.zoom.as_ref(),
+            ControlField::Zoom,
+            None,
+            None,
+        ),
     ];
     let auto_rows = [
         ("auto_focus", capabilities.auto_focus, AutoMode::Focus),
@@ -634,13 +688,14 @@ fn render_controls_block(
     let live_on = *live_apply.read();
     rsx! {
         div { class: "stream-cell-controls",
-            for (name, range, field, paired_auto) in numeric_rows {
+            for (name, range, field, paired_auto, paired_auto_label) in numeric_rows {
                 if let Some(range) = range {
                     NumericControlRow {
                         label: name,
                         range: *range,
                         field,
                         paired_auto,
+                        paired_auto_label,
                         current,
                         pending,
                         device,
@@ -781,6 +836,7 @@ fn NumericControlRow(
     range: ControlRange,
     field: ControlField,
     paired_auto: Option<AutoMode>,
+    paired_auto_label: Option<&'static str>,
     current: Signal<Controls>,
     pending: Signal<Controls>,
     device: Signal<Option<Device>>,
@@ -809,10 +865,17 @@ fn NumericControlRow(
     };
     let slider_disabled = !enabled || locked_by_auto;
     let checkbox_disabled = locked_by_auto;
+    let lock_tooltip = if locked_by_auto {
+        paired_auto_label.map(auto_lock_hover).unwrap_or_default()
+    } else {
+        String::new()
+    };
     rsx! {
         div { class: "control-row",
             span { class: "control-label", "{label}" }
-            div { class: "control-toggle",
+            div {
+                class: "control-toggle",
+                title: "{lock_tooltip}",
                 input {
                     r#type: "checkbox",
                     checked: enabled,
@@ -913,9 +976,9 @@ fn AutoTriStateRow(
     }
 }
 
-fn capability_row(name: &str, detail: (bool, String)) -> (String, String, bool) {
+fn capability_row(kind: ControlKind, detail: (bool, String)) -> (ControlKind, bool, String) {
     let (supported, text) = detail;
-    (name.to_string(), text, supported)
+    (kind, supported, text)
 }
 
 fn range_row(range: Option<&ControlRange>) -> (bool, String) {
