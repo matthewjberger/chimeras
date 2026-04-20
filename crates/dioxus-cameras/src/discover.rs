@@ -18,9 +18,8 @@
 //!         button {
 //!             disabled: running,
 //!             onclick: move |_| {
-//!                 let net: ipnet::IpNet = "192.168.1.0/24".parse().unwrap();
 //!                 discovery.start.call(DiscoverConfig {
-//!                     subnets: vec![net],
+//!                     endpoints: vec!["127.0.0.1:554".parse().unwrap()],
 //!                     ..Default::default()
 //!                 });
 //!             },

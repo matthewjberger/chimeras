@@ -17,9 +17,8 @@
 //!
 //! fn ui(ui: &mut egui::Ui, session: &mut Option<egui_cameras::DiscoverySession>) {
 //!     if ui.button("Scan").clicked() {
-//!         let net: ipnet::IpNet = "192.168.1.0/24".parse().unwrap();
 //!         *session = start_discovery(DiscoverConfig {
-//!             subnets: vec![net],
+//!             endpoints: vec!["127.0.0.1:554".parse().unwrap()],
 //!             ..Default::default()
 //!         })
 //!         .ok();
