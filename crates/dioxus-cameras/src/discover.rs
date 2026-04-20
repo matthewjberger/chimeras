@@ -15,15 +15,16 @@
 //!     let running = *discovery.running.read();
 //!     let cameras = discovery.cameras.read().len();
 //!     rsx! {
+//!         // `start` auto-cancels any in-flight scan, so the button is
+//!         // always pressable; the label changes to communicate intent.
 //!         button {
-//!             disabled: running,
 //!             onclick: move |_| {
 //!                 discovery.start.call(DiscoverConfig {
 //!                     endpoints: vec!["127.0.0.1:554".parse().unwrap()],
 //!                     ..Default::default()
 //!                 });
 //!             },
-//!             "Scan"
+//!             if running { "Restart scan" } else { "Scan" }
 //!         }
 //!         button {
 //!             disabled: !running,
@@ -76,9 +77,12 @@ pub struct UseDiscovery {
     pub total: Signal<usize>,
     /// `true` while a scan is in flight.
     pub running: Signal<bool>,
-    /// Last error from [`cameras::discover::discover`] if `start` failed to
-    /// launch the scan (bad subnet cap, tokio runtime build failure). Cleared
-    /// to `None` on each successful `start`.
+    /// Last error encountered while trying to launch a scan. Covers
+    /// synchronous [`cameras::discover::discover`] failures (bad subnet
+    /// cap, tokio runtime build failure) and worker-thread spawn failures.
+    /// Cleared to `None` on each successful `start`. Mid-scan errors do
+    /// not exist: the library's scan task either runs to completion or is
+    /// cancelled, so there is no other error path to surface here.
     pub error: Signal<Option<Error>>,
     /// Start a new scan.
     ///
@@ -179,11 +183,23 @@ pub fn use_discovery() -> UseDiscovery {
         let tx = start_tx.clone();
         let handle = Arc::clone(&start_handle);
         let current = Arc::clone(&start_scan_id);
-        let _ = std::thread::Builder::new()
+        let spawn_result = std::thread::Builder::new()
             .name("cameras-discover-hook".into())
             .spawn(move || {
                 run_discovery(handle, tx, id, current);
             });
+        if let Err(spawn_error) = spawn_result {
+            // OS out of resources for threads, or similar. Unwind: pull the
+            // Discovery we just installed so it doesn't sit there undriven,
+            // surface the error, and flip running back to false.
+            let mut guard = start_handle.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.take();
+            error.set(Some(Error::Backend {
+                platform: "discover",
+                message: format!("worker thread spawn: {spawn_error}"),
+            }));
+            running.set(false);
+        }
     });
 
     let cancel_handle = Arc::clone(&handle);
@@ -246,24 +262,30 @@ fn run_discovery(
             };
             next_event(disc, WORKER_TICK)
         };
-        if current.load(Ordering::SeqCst) != id {
-            return;
-        }
+        // Gate each send on a fresh gen check. Keeping the check adjacent
+        // to the send closes the TOCTOU window where UI-thread `start` /
+        // `cancel` / `clear` could bump gen between "we observed this
+        // event" and "we forwarded it to the poll task", which would let
+        // a stale worker's event pollute the next scan's signals.
         match event {
             Ok(DiscoverEvent::Done) => {
-                let _ = tx.send(DiscoverEvent::Done);
-                let mut guard = handle.lock().unwrap_or_else(PoisonError::into_inner);
                 if current.load(Ordering::SeqCst) == id {
+                    let _ = tx.send(DiscoverEvent::Done);
+                    let mut guard = handle.lock().unwrap_or_else(PoisonError::into_inner);
                     guard.take();
                 }
                 return;
             }
             Ok(event) => {
-                let _ = tx.send(event);
+                if current.load(Ordering::SeqCst) == id {
+                    let _ = tx.send(event);
+                }
             }
             Err(cameras::Error::Timeout) => continue,
             Err(_) => {
-                let _ = tx.send(DiscoverEvent::Done);
+                if current.load(Ordering::SeqCst) == id {
+                    let _ = tx.send(DiscoverEvent::Done);
+                }
                 return;
             }
         }
