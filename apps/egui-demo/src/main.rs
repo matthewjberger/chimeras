@@ -5,15 +5,16 @@ use std::time::{Duration, Instant};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use cameras::Credentials;
 use cameras::analysis;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use cameras::discover::DiscoverConfig;
 use cameras::{
     CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Device, PixelFormat,
     Rect, Resolution, StreamConfig,
 };
 use eframe::egui;
-use egui_cameras::{
-    DiscoverySession, capture_frame, poll_discovery, set_active, show_discovery, start_discovery,
-};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use egui_cameras::{DiscoverySession, poll_discovery, show_discovery, start_discovery};
+use egui_cameras::{capture_frame, set_active};
 use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
 
 type ApplyRequest = (Device, Controls);
@@ -93,9 +94,13 @@ struct App {
     apply_tx: mpsc::Sender<ApplyRequest>,
     live_apply: bool,
     autofocus: Option<AutofocusState>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     discover_open: bool,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     discover_subnet: String,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     discover_error: Option<String>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     discovery: Option<DiscoverySession>,
 }
 
@@ -121,13 +126,18 @@ impl App {
             apply_tx,
             live_apply: false,
             autofocus: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             discover_open: false,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             discover_subnet: "192.168.1.0/24".into(),
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             discover_error: None,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             discovery: None,
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn render_discover(&mut self, ui: &mut egui::Ui) {
         let running = self
             .discovery
@@ -167,6 +177,7 @@ impl App {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn start_discover(&mut self) {
         let (subnets, endpoints) = match parse_targets(&self.discover_subnet) {
             Ok(parsed) => parsed,
@@ -191,6 +202,7 @@ impl App {
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn open_discovered(&mut self, camera: cameras::discover::DiscoveredCamera) {
         let CameraSource::Rtsp { url, .. } = &camera.source else {
             return;
@@ -499,6 +511,7 @@ impl eframe::App for App {
         if self.autofocus.is_some() {
             self.tick_autofocus(&ctx);
         }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(session) = self.discovery.as_mut() {
             poll_discovery(session);
         }
@@ -514,10 +527,14 @@ impl eframe::App for App {
                 ui.separator();
                 ui.selectable_value(&mut self.source_mode, SourceMode::Usb, "USB");
                 ui.selectable_value(&mut self.source_mode, SourceMode::Rtsp, "RTSP");
-                ui.separator();
-                ui.toggle_value(&mut self.discover_open, "Discover");
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                {
+                    ui.separator();
+                    ui.toggle_value(&mut self.discover_open, "Discover");
+                }
             });
 
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             if self.discover_open {
                 self.render_discover(ui);
             }
@@ -1130,6 +1147,7 @@ fn unix_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn parse_targets(input: &str) -> Result<(Vec<ipnet::IpNet>, Vec<std::net::SocketAddr>), String> {
     let mut subnets = Vec::new();
     let mut endpoints = Vec::new();

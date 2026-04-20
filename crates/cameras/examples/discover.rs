@@ -3,6 +3,7 @@
 //!
 //! Accepts a comma-separated list of CIDR blocks and/or `host:port`
 //! endpoints. Defaults to `192.168.1.0/24` when no argument is given.
+//! Only available on macOS and Windows, the RTSP sink is platform-gated.
 //!
 //! ```bash
 //! cargo run --features discover --example discover -- 192.168.1.0/24
@@ -10,12 +11,13 @@
 //! cargo run --features discover --example discover -- "10.0.0.0/24,127.0.0.1:8554"
 //! ```
 
-use std::net::SocketAddr;
-use std::time::Duration;
-
-use cameras::discover::{DiscoverConfig, DiscoverEvent, discover, next_event};
-
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn main() -> Result<(), cameras::Error> {
+    use std::net::SocketAddr;
+    use std::time::Duration;
+
+    use cameras::discover::{DiscoverConfig, DiscoverEvent, discover, next_event};
+
     let input = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "192.168.1.0/24".into());
@@ -85,4 +87,9 @@ fn main() -> Result<(), cameras::Error> {
 
     println!("done: {hosts} hosts, {cams} cameras");
     Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn main() {
+    eprintln!("cameras::discover is only available on macOS and Windows");
 }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -6,6 +7,7 @@ use std::time::Duration;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use cameras::Credentials;
 use cameras::analysis;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use cameras::discover::DiscoverConfig;
 use cameras::{
     CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Device, PixelFormat,
@@ -13,10 +15,11 @@ use cameras::{
 };
 use dioxus::prelude::*;
 use dioxus_cameras::{
-    PreviewScript, StreamPreview, StreamStatus, UseDevices, UseDiscovery, UseStreams,
-    register_with, start_preview_server, use_camera_stream, use_devices, use_discovery,
-    use_streams,
+    PreviewScript, StreamPreview, StreamStatus, UseDevices, UseStreams, register_with,
+    start_preview_server, use_camera_stream, use_devices, use_streams,
 };
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use dioxus_cameras::{UseDiscovery, use_discovery};
 use futures_timer::Delay;
 
 const AUTOFOCUS_SETTLE: Duration = Duration::from_millis(150);
@@ -95,12 +98,10 @@ enum SourceMode {
 fn App() -> Element {
     let streams = use_streams();
     let devices = use_devices();
-    let discovery = use_discovery();
     let ids = streams.ids;
     let seeds: Signal<HashMap<u32, CameraSource>> = use_signal(HashMap::new);
-    let show_discover = use_signal(|| false);
 
-    let discover_open = *show_discover.read();
+    let discover_toggle = render_discover_toggle(streams, seeds);
 
     rsx! {
         style { {APP_CSS} }
@@ -113,14 +114,7 @@ fn App() -> Element {
                     onclick: move |_| devices.refresh.call(()),
                     "Refresh cameras"
                 }
-                button {
-                    class: "btn btn-ghost",
-                    onclick: move |_| {
-                        let now = *show_discover.peek();
-                        show_discover.clone().set(!now);
-                    },
-                    if discover_open { "Hide discover" } else { "Discover" }
-                }
+                {discover_toggle.button}
                 button {
                     class: "btn btn-primary add-stream-btn",
                     onclick: move |_| { streams.add.call(()); },
@@ -128,9 +122,7 @@ fn App() -> Element {
                 }
             }
 
-            if discover_open {
-                DiscoverPanel { discovery, streams, seeds }
-            }
+            {discover_toggle.panel}
 
             section { class: "stream-grid",
                 for id in ids() {
@@ -142,6 +134,52 @@ fn App() -> Element {
     }
 }
 
+struct DiscoverToggle {
+    button: Element,
+    panel: Element,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn render_discover_toggle(
+    streams: UseStreams,
+    seeds: Signal<HashMap<u32, CameraSource>>,
+) -> DiscoverToggle {
+    let discovery = use_discovery();
+    let show_discover = use_signal(|| false);
+    let discover_open = *show_discover.read();
+
+    let button = rsx! {
+        button {
+            class: "btn btn-ghost",
+            onclick: move |_| {
+                let now = *show_discover.peek();
+                show_discover.clone().set(!now);
+            },
+            if discover_open { "Hide discover" } else { "Discover" }
+        }
+    };
+
+    let panel = if discover_open {
+        rsx! { DiscoverPanel { discovery, streams, seeds } }
+    } else {
+        rsx! {}
+    };
+
+    DiscoverToggle { button, panel }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn render_discover_toggle(
+    _streams: UseStreams,
+    _seeds: Signal<HashMap<u32, CameraSource>>,
+) -> DiscoverToggle {
+    DiscoverToggle {
+        button: rsx! {},
+        panel: rsx! {},
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[component]
 fn DiscoverPanel(
     discovery: UseDiscovery,
@@ -263,10 +301,10 @@ fn StreamCell(
     seeds: Signal<HashMap<u32, CameraSource>>,
 ) -> Element {
     let initial_seed: Option<CameraSource> = use_hook(|| seeds.clone().write().remove(&id));
-    let initial_url = match initial_seed.as_ref() {
-        Some(CameraSource::Rtsp { url, .. }) => url.clone(),
-        _ => "rtsp://127.0.0.1:8554/live".to_string(),
-    };
+    let initial_url = initial_seed
+        .as_ref()
+        .and_then(rtsp_url_from_source)
+        .unwrap_or_else(|| "rtsp://127.0.0.1:8554/live".to_string());
     let source_mode = use_signal(|| SourceMode::Rtsp);
     let selected_device = use_signal(|| 0usize);
     let url = use_signal(|| initial_url);
@@ -1224,6 +1262,20 @@ fn build_rtsp_source(_url: &str, _username: &str, _password: &str) -> Option<Cam
     None
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn rtsp_url_from_source(source: &CameraSource) -> Option<String> {
+    match source {
+        CameraSource::Rtsp { url, .. } => Some(url.clone()),
+        _ => None,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn rtsp_url_from_source(_source: &CameraSource) -> Option<String> {
+    None
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn parse_targets(input: &str) -> Result<(Vec<ipnet::IpNet>, Vec<SocketAddr>), String> {
     let mut subnets = Vec::new();
     let mut endpoints = Vec::new();
