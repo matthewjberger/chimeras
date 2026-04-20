@@ -32,6 +32,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = []
 rtsp = ["cameras/rtsp"]
+discover = ["cameras/discover", "rtsp"]
 
 [dependencies]
 bytes = "1"

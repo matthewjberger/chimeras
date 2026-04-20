@@ -32,6 +32,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = []
 rtsp = ["dep:retina", "dep:tokio", "dep:url", "dep:futures-util"]
+discover = ["rtsp", "dep:ipnet", "tokio/io-util"]
 analysis = []
 controls = ["windows/Win32_Media_DirectShow"]
 
@@ -45,6 +46,7 @@ retina = { version = "0.4", optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net"], optional = true }
 url = { version = "2", optional = true }
 futures-util = { version = "0.3", optional = true }
+ipnet = { version = "2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"] }
@@ -88,3 +90,7 @@ required-features = ["analysis"]
 [[example]]
 name = "autofocus"
 required-features = ["analysis", "controls"]
+
+[[example]]
+name = "discover"
+required-features = ["discover"]

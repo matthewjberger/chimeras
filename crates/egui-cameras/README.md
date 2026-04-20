@@ -94,6 +94,11 @@ let frame = capture_frame(&stream.pump);
 | Feature | Default | Description |
 |---------|:-------:|-------------|
 | `rtsp` | off | Forwards to `cameras/rtsp`; enables `CameraSource::Rtsp` on macOS and Windows. |
+| `discover` | off | Forwards to `cameras/discover`; enables the `DiscoveryWidget` for scanning a subnet for Axis RTSP cameras. |
+
+## Discovery
+
+With the `discover` feature, `start_discovery(config)` returns a `DiscoverySession`. Call `poll_discovery(&mut session)` each frame and `show_discovery(&session, ui)` to render a clickable result list; a click yields a `DiscoveredCamera` that can be passed to `cameras::open_source`. Configs mix CIDR `subnets` and explicit `host:port` `endpoints`, so port-forwarded tunnels work alongside a LAN scan. `poll_discovery` ignores `DiscoverEvent::HostUnmatched` internally, callers that need to see the raw `Server:` header for debugging should use the lower-level `cameras::discover` API directly. The `apps/egui-demo` Discover panel accepts comma-separated CIDRs and/or `host:port` entries in its Targets field.
 
 ## Versioning
 

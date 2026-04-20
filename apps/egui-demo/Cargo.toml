@@ -5,8 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cameras = { path = "../../crates/cameras", features = ["rtsp", "analysis", "controls"] }
-egui-cameras = { path = "../../crates/egui-cameras", features = ["rtsp"] }
+cameras = { path = "../../crates/cameras", features = ["rtsp", "analysis", "controls", "discover"] }
+egui-cameras = { path = "../../crates/egui-cameras", features = ["rtsp", "discover"] }
 eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui = "0.34"
 image = { version = "0.25", default-features = false, features = ["png"] }
+ipnet = "2"

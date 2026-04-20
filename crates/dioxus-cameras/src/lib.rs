@@ -72,12 +72,22 @@ mod registry;
 mod server;
 mod streams;
 
+#[cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows")))]
+mod discover;
+
 pub use camera_stream::{StreamStatus, UseCameraStream, use_camera_stream};
 pub use component::{PreviewScript, StreamPreview};
 pub use devices::{UseDevices, use_devices};
 pub use registry::{LatestFrame, Registry, get_or_create_sink, publish_frame, remove_sink};
 pub use server::{PreviewServer, register_with, start_preview_server};
 pub use streams::{UseStreams, use_streams};
+
+#[cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows"))))
+)]
+pub use discover::{UseDiscovery, use_discovery};
 
 /// The JavaScript blob that drives the WebGL2 preview renderer.
 ///

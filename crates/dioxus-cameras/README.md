@@ -124,8 +124,13 @@ stream.active.clone().set(true);
 | Feature | Default | Description |
 |---------|:-------:|-------------|
 | `rtsp` | off | Forwards to `cameras/rtsp`; enables `CameraSource::Rtsp` on macOS and Windows. |
+| `discover` | off | Forwards to `cameras/discover`; enables the `use_discovery` hook for scanning a subnet for Axis RTSP cameras. |
 
 Enable with `dioxus-cameras = { version = "0.1", features = ["rtsp"] }`.
+
+## Discovery
+
+With the `discover` feature, `use_discovery()` returns a `UseDiscovery` handle whose `cameras`, `scanned`, `total`, `running`, and `error` signals update as results arrive. Pass a `cameras::discover::DiscoverConfig` to `start.call(config)` to kick off a scan; call `cancel.call(())` to stop early. Configs mix CIDR `subnets` and explicit `host:port` `endpoints` freely, so port-forwarded tunnels alongside a LAN scan work in one pass. Synchronous start failures (invalid subnet, runtime build) land in the `error` signal as a `cameras::Error`. The hook ignores `DiscoverEvent::HostUnmatched` internally, callers that need to see the raw `Server:` header for debugging should use the lower-level `cameras::discover` API directly. The `apps/dioxus-demo` Discover panel accepts comma-separated CIDRs and/or `host:port` entries in its input field and turns any clicked result into a pre-connected stream cell.
 
 ## Source separation
 

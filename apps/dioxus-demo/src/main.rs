@@ -1,17 +1,21 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::mpsc;
 use std::time::Duration;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use cameras::Credentials;
 use cameras::analysis;
+use cameras::discover::DiscoverConfig;
 use cameras::{
     CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Device, PixelFormat,
     Rect, Resolution, StreamConfig,
 };
 use dioxus::prelude::*;
 use dioxus_cameras::{
-    PreviewScript, StreamPreview, StreamStatus, UseDevices, UseStreams, register_with,
-    start_preview_server, use_camera_stream, use_devices, use_streams,
+    PreviewScript, StreamPreview, StreamStatus, UseDevices, UseDiscovery, UseStreams,
+    register_with, start_preview_server, use_camera_stream, use_devices, use_discovery,
+    use_streams,
 };
 use futures_timer::Delay;
 
@@ -91,7 +95,12 @@ enum SourceMode {
 fn App() -> Element {
     let streams = use_streams();
     let devices = use_devices();
+    let discovery = use_discovery();
     let ids = streams.ids;
+    let seeds: Signal<HashMap<u32, CameraSource>> = use_signal(HashMap::new);
+    let show_discover = use_signal(|| false);
+
+    let discover_open = *show_discover.read();
 
     rsx! {
         style { {APP_CSS} }
@@ -105,15 +114,27 @@ fn App() -> Element {
                     "Refresh cameras"
                 }
                 button {
+                    class: "btn btn-ghost",
+                    onclick: move |_| {
+                        let now = *show_discover.peek();
+                        show_discover.clone().set(!now);
+                    },
+                    if discover_open { "Hide discover" } else { "Discover" }
+                }
+                button {
                     class: "btn btn-primary add-stream-btn",
                     onclick: move |_| { streams.add.call(()); },
                     "+ Add stream"
                 }
             }
 
+            if discover_open {
+                DiscoverPanel { discovery, streams, seeds }
+            }
+
             section { class: "stream-grid",
                 for id in ids() {
-                    StreamCell { key: "{id}", id, streams, devices }
+                    StreamCell { key: "{id}", id, streams, devices, seeds }
                 }
             }
         }
@@ -122,13 +143,136 @@ fn App() -> Element {
 }
 
 #[component]
-fn StreamCell(id: u32, streams: UseStreams, devices: UseDevices) -> Element {
+fn DiscoverPanel(
+    discovery: UseDiscovery,
+    streams: UseStreams,
+    seeds: Signal<HashMap<u32, CameraSource>>,
+) -> Element {
+    let targets_input = use_signal(|| "192.168.1.0/24".to_string());
+    let parse_error = use_signal(String::new);
+    let running = *discovery.running.read();
+    let scanned = *discovery.scanned.read();
+    let total = *discovery.total.read();
+    let cameras_read = discovery.cameras.read();
+    let start_error = discovery.error.read().as_ref().map(|e| e.to_string());
+    let combined_error = if !parse_error.read().is_empty() {
+        Some(parse_error.read().clone())
+    } else {
+        start_error
+    };
+
+    let start_scan = move |_| {
+        let raw = targets_input.peek().clone();
+        match parse_targets(&raw) {
+            Ok((subnets, endpoints)) => {
+                parse_error.clone().set(String::new());
+                discovery.start.call(DiscoverConfig {
+                    subnets,
+                    endpoints,
+                    ..Default::default()
+                });
+            }
+            Err(err) => {
+                parse_error.clone().set(err);
+            }
+        }
+    };
+
+    let cancel_scan = move |_| discovery.cancel.call(());
+
+    rsx! {
+        section { class: "discover-panel",
+            div { class: "discover-controls",
+                input {
+                    class: "input",
+                    r#type: "text",
+                    placeholder: "192.168.1.0/24 or 127.0.0.1:554,127.0.0.1:555",
+                    value: "{targets_input()}",
+                    oninput: move |event| targets_input.clone().set(event.value()),
+                }
+                button {
+                    class: "btn btn-primary",
+                    disabled: running,
+                    onclick: start_scan,
+                    "Scan"
+                }
+                button {
+                    class: "btn btn-ghost",
+                    disabled: !running,
+                    onclick: cancel_scan,
+                    "Cancel"
+                }
+                span { class: "stream-cell-status",
+                    if let Some(message) = combined_error.as_ref() {
+                        "{message}"
+                    } else if running && total > 0 {
+                        "scanning {scanned}/{total} · {cameras_read.len()} found"
+                    } else if running {
+                        "scanning..."
+                    } else if total > 0 {
+                        "done: {cameras_read.len()} cameras across {total} hosts"
+                    } else {
+                        "enter CIDRs or host:port (comma-separated) and press Scan"
+                    }
+                }
+            }
+            div { class: "discover-results",
+                if cameras_read.is_empty() && !running {
+                    span { class: "stream-cell-status", "no results yet" }
+                } else {
+                    for camera in cameras_read.iter() {
+                        {
+                            let cam = camera.clone();
+                            let channel = cam
+                                .channel
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "?".into());
+                            let label = format!(
+                                "{} [{}] ch{channel}  ·  {}",
+                                cam.host,
+                                cam.vendor.as_deref().unwrap_or("?"),
+                                match &cam.source {
+                                    CameraSource::Rtsp { url, .. } => url.as_str(),
+                                    _ => "(non-rtsp)",
+                                },
+                            );
+                            let seed_source = cam.source.clone();
+                            rsx! {
+                                button {
+                                    class: "discover-row",
+                                    onclick: move |_| {
+                                        let new_id = streams.add.call(());
+                                        seeds.clone().write().insert(new_id, seed_source.clone());
+                                    },
+                                    "{label}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn StreamCell(
+    id: u32,
+    streams: UseStreams,
+    devices: UseDevices,
+    seeds: Signal<HashMap<u32, CameraSource>>,
+) -> Element {
+    let initial_seed: Option<CameraSource> = use_hook(|| seeds.clone().write().remove(&id));
+    let initial_url = match initial_seed.as_ref() {
+        Some(CameraSource::Rtsp { url, .. }) => url.clone(),
+        _ => "rtsp://127.0.0.1:8554/live".to_string(),
+    };
     let source_mode = use_signal(|| SourceMode::Rtsp);
     let selected_device = use_signal(|| 0usize);
-    let url = use_signal(|| "rtsp://127.0.0.1:8554/live".to_string());
+    let url = use_signal(|| initial_url);
     let username = use_signal(String::new);
     let password = use_signal(String::new);
-    let source: Signal<Option<CameraSource>> = use_signal(|| None);
+    let source: Signal<Option<CameraSource>> = use_signal(|| initial_seed);
     let last_capture = use_signal(|| String::from("-"));
     let capabilities: Signal<Option<ControlCapabilities>> = use_signal(|| None);
     let capabilities_error: Signal<Option<String>> = use_signal(|| None);
@@ -1078,4 +1222,26 @@ fn build_rtsp_source(url: &str, username: &str, password: &str) -> Option<Camera
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn build_rtsp_source(_url: &str, _username: &str, _password: &str) -> Option<CameraSource> {
     None
+}
+
+fn parse_targets(input: &str) -> Result<(Vec<ipnet::IpNet>, Vec<SocketAddr>), String> {
+    let mut subnets = Vec::new();
+    let mut endpoints = Vec::new();
+    for raw in input.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if let Ok(endpoint) = token.parse::<SocketAddr>() {
+            endpoints.push(endpoint);
+        } else if let Ok(net) = token.parse::<ipnet::IpNet>() {
+            subnets.push(net);
+        } else {
+            return Err(format!("could not parse `{token}` as CIDR or host:port"));
+        }
+    }
+    if subnets.is_empty() && endpoints.is_empty() {
+        return Err("enter at least one CIDR or host:port".into());
+    }
+    Ok((subnets, endpoints))
 }

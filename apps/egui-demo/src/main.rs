@@ -5,12 +5,15 @@ use std::time::{Duration, Instant};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use cameras::Credentials;
 use cameras::analysis;
+use cameras::discover::DiscoverConfig;
 use cameras::{
     CameraSource, ControlCapabilities, ControlKind, ControlRange, Controls, Device, PixelFormat,
     Rect, Resolution, StreamConfig,
 };
 use eframe::egui;
-use egui_cameras::{capture_frame, set_active};
+use egui_cameras::{
+    DiscoverySession, capture_frame, poll_discovery, set_active, show_discovery, start_discovery,
+};
 use image::{ExtendedColorType, ImageEncoder, codecs::png::PngEncoder};
 
 type ApplyRequest = (Device, Controls);
@@ -90,6 +93,10 @@ struct App {
     apply_tx: mpsc::Sender<ApplyRequest>,
     live_apply: bool,
     autofocus: Option<AutofocusState>,
+    discover_open: bool,
+    discover_subnet: String,
+    discover_error: Option<String>,
+    discovery: Option<DiscoverySession>,
 }
 
 impl App {
@@ -114,7 +121,85 @@ impl App {
             apply_tx,
             live_apply: false,
             autofocus: None,
+            discover_open: false,
+            discover_subnet: "192.168.1.0/24".into(),
+            discover_error: None,
+            discovery: None,
         }
+    }
+
+    fn render_discover(&mut self, ui: &mut egui::Ui) {
+        let running = self
+            .discovery
+            .as_ref()
+            .map(|session| !session.done)
+            .unwrap_or(false);
+        ui.horizontal(|ui| {
+            ui.label("Targets");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.discover_subnet)
+                    .hint_text("CIDR or host:port, comma-separated")
+                    .desired_width(280.0),
+            );
+            let start_enabled = !running;
+            if ui
+                .add_enabled(start_enabled, egui::Button::new("Scan"))
+                .clicked()
+            {
+                self.start_discover();
+            }
+            if ui
+                .add_enabled(running, egui::Button::new("Cancel"))
+                .clicked()
+            {
+                self.discovery = None;
+            }
+            if let Some(message) = &self.discover_error {
+                ui.colored_label(egui::Color32::from_rgb(200, 80, 80), message);
+            }
+        });
+        let clicked = self
+            .discovery
+            .as_ref()
+            .and_then(|session| show_discovery(session, ui));
+        if let Some(camera) = clicked {
+            self.open_discovered(camera);
+        }
+    }
+
+    fn start_discover(&mut self) {
+        let (subnets, endpoints) = match parse_targets(&self.discover_subnet) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.discover_error = Some(error);
+                return;
+            }
+        };
+        let config = DiscoverConfig {
+            subnets,
+            endpoints,
+            ..Default::default()
+        };
+        match start_discovery(config) {
+            Ok(session) => {
+                self.discovery = Some(session);
+                self.discover_error = None;
+            }
+            Err(error) => {
+                self.discover_error = Some(format!("Start failed: {error}"));
+            }
+        }
+    }
+
+    fn open_discovered(&mut self, camera: cameras::discover::DiscoveredCamera) {
+        let CameraSource::Rtsp { url, .. } = &camera.source else {
+            return;
+        };
+        self.source_mode = SourceMode::Rtsp;
+        self.rtsp_url = url.clone();
+        self.rtsp_username.clear();
+        self.rtsp_password.clear();
+        self.connect();
     }
 
     fn queue_apply(&self) {
@@ -414,6 +499,9 @@ impl eframe::App for App {
         if self.autofocus.is_some() {
             self.tick_autofocus(&ctx);
         }
+        if let Some(session) = self.discovery.as_mut() {
+            poll_discovery(session);
+        }
         if let Some(stream) = &mut self.stream
             && let Err(error) = egui_cameras::update_texture(stream, &ctx)
         {
@@ -426,7 +514,13 @@ impl eframe::App for App {
                 ui.separator();
                 ui.selectable_value(&mut self.source_mode, SourceMode::Usb, "USB");
                 ui.selectable_value(&mut self.source_mode, SourceMode::Rtsp, "RTSP");
+                ui.separator();
+                ui.toggle_value(&mut self.discover_open, "Discover");
             });
+
+            if self.discover_open {
+                self.render_discover(ui);
+            }
 
             let mut selection_changed = false;
             ui.horizontal(|ui| match self.source_mode {
@@ -1034,4 +1128,26 @@ fn unix_timestamp() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn parse_targets(input: &str) -> Result<(Vec<ipnet::IpNet>, Vec<std::net::SocketAddr>), String> {
+    let mut subnets = Vec::new();
+    let mut endpoints = Vec::new();
+    for raw in input.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if let Ok(endpoint) = token.parse::<std::net::SocketAddr>() {
+            endpoints.push(endpoint);
+        } else if let Ok(net) = token.parse::<ipnet::IpNet>() {
+            subnets.push(net);
+        } else {
+            return Err(format!("could not parse `{token}` as CIDR or host:port"));
+        }
+    }
+    if subnets.is_empty() && endpoints.is_empty() {
+        return Err("enter at least one CIDR or host:port".into());
+    }
+    Ok((subnets, endpoints))
 }

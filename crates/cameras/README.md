@@ -204,6 +204,59 @@ just run
 
 In the demo window, switch the source toggle to **RTSP**, paste `rtsp://127.0.0.1:8554/live` into the URL field, and press **Connect**. On macOS and Windows, H.264/H.265 streams are hardware-decoded (VideoToolbox / Media Foundation); MJPEG streams are delivered verbatim and decoded via `zune-jpeg` on demand.
 
+## Discovery
+
+Enable the `discover` feature to scan for Axis RTSP cameras. Discovery is RTSP-only and currently recognizes a single vendor (Axis). Scans mix expanded CIDR subnets with explicit `host:port` endpoints so you can probe both a local subnet and a set of port-forwarded tunnels in one run.
+
+```toml
+[dependencies]
+cameras = { version = "0.1", features = ["discover"] }
+ipnet = "2"
+```
+
+```rust
+use std::time::Duration;
+use cameras::discover::{self, DiscoverConfig, DiscoverEvent};
+
+let net: ipnet::IpNet = "192.168.1.0/24".parse().unwrap();
+let discovery = discover::discover(DiscoverConfig {
+    subnets: vec![net],
+    ..Default::default()
+})?;
+
+loop {
+    match discover::next_event(&discovery, Duration::from_millis(500)) {
+        Ok(DiscoverEvent::CameraFound(camera)) => println!("{:?}", camera),
+        Ok(DiscoverEvent::Progress { scanned, total }) => eprintln!("{scanned}/{total}"),
+        Ok(DiscoverEvent::Done) => break,
+        _ => continue,
+    }
+}
+```
+
+Port-forwarded tunnel scenario (e.g. Teleport forwarding several remote DVRs to distinct local ports on `127.0.0.1`):
+
+```rust
+use cameras::discover::{self, DiscoverConfig};
+
+let discovery = discover::discover(DiscoverConfig {
+    endpoints: vec![
+        "127.0.0.1:10001".parse().unwrap(),
+        "127.0.0.1:10002".parse().unwrap(),
+        "127.0.0.1:10003".parse().unwrap(),
+    ],
+    ..Default::default()
+})?;
+```
+
+- **Vendors**: Axis. PRs for more welcome.
+- **Scope**: RTSP only. No ONVIF, no WS-Discovery, no mDNS. IPv4 only.
+- **Credentials**: anonymous-only for v1.
+- **Targets**: mix `subnets` (expanded at `rtsp_port`, default 554) and `endpoints` (verbatim `SocketAddr`s) freely. Channel URLs use each target's actual port, not a hardcoded one.
+- **Limits**: 65,536 combined hosts per scan, configurable `concurrency`, `connect_timeout`, `rtsp_timeout`.
+- **Debugging unknown hosts**: `DiscoverEvent::HostUnmatched { host, server }` is emitted for every host that answered RTSP but whose `Server:` header did not match a known vendor. Inspecting `server` tells you exactly what to add to the vendor dispatch table.
+- **Example**: `just run-discover 192.168.1.0/24` or `just run-discover 127.0.0.1:554,127.0.0.1:555`.
+
 ## Examples
 
 Runnable integration templates for using cameras outside Dioxus (CLI, egui / iced, Tauri, daemons, anything). See the [examples](examples/) directory.

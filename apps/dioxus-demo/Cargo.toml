@@ -5,7 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-cameras = { path = "../../crates/cameras", features = ["rtsp", "analysis", "controls"] }
-dioxus-cameras = { path = "../../crates/dioxus-cameras", features = ["rtsp"] }
+cameras = { path = "../../crates/cameras", features = ["rtsp", "analysis", "controls", "discover"] }
+dioxus-cameras = { path = "../../crates/dioxus-cameras", features = ["rtsp", "discover"] }
 dioxus = { version = "0.7", features = ["desktop"] }
 futures-timer = "3"
+ipnet = "2"

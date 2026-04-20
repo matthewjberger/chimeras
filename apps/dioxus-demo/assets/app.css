@@ -563,3 +563,48 @@ body {
     height: 12px;
     cursor: pointer;
 }
+
+.discover-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: var(--base-5);
+    border: 1px solid var(--base-20);
+    border-radius: 10px;
+}
+
+.discover-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.discover-controls .input {
+    flex: 1;
+}
+
+.discover-results {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+
+.discover-row {
+    text-align: left;
+    background: var(--base-8);
+    border: 1px solid var(--base-20);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    color: var(--leche);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 12px;
+}
+
+.discover-row:hover {
+    background: var(--base-15);
+    border-color: var(--base-40);
+}

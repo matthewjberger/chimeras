@@ -159,6 +159,9 @@ pub use rtsp::open_rtsp;
 #[cfg(all(feature = "rtsp", any(target_os = "macos", target_os = "windows")))]
 mod decode;
 
+#[cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows")))]
+pub mod discover;
+
 use std::time::Duration;
 
 /// Enumerate every video capture device the platform currently sees.

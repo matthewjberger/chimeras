@@ -61,4 +61,8 @@ pub enum Error {
         /// Short identifier for what is unsupported (control field name, missing interface, or scope phrase).
         reason: &'static str,
     },
+
+    /// A CIDR subnet passed to discovery was rejected (unparsable, IPv6, or exceeds the host cap).
+    #[error("invalid subnet: {0}")]
+    InvalidSubnet(String),
 }

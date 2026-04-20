@@ -116,6 +116,14 @@ run-sharpest path="sharpest.png":
 run-autofocus:
   cargo run -p cameras --features "analysis,controls" --example autofocus
 
+# Scan CIDR subnets and/or host:port endpoints (comma-separated) for Axis
+# RTSP cameras. Defaults to 192.168.1.0/24. Examples:
+#   just run-discover 10.0.0.0/24
+#   just run-discover 127.0.0.1:554,127.0.0.1:555
+#   just run-discover "10.0.0.0/24,127.0.0.1:8554"
+run-discover targets="192.168.1.0/24":
+  cargo run -p cameras --features discover --example discover -- "{{targets}}"
+
 # Run mediamtx in the foreground to host rtsp://127.0.0.1:8554. Run this
 # in one terminal, then `just rtsp-publish PATH` in another to push an
 # MP4 into it. Requires mediamtx on PATH.

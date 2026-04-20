@@ -36,6 +36,16 @@
 
 pub use cameras;
 
+#[cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows")))]
+mod discover;
+
+#[cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows")))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows"))))
+)]
+pub use discover::{DiscoverySession, poll_discovery, show_discovery, start_discovery};
+
 use std::sync::{Arc, Mutex, PoisonError};
 
 use cameras::{Camera, Frame, pump};
