@@ -34,5 +34,5 @@ rtsp = ["cameras/rtsp"]
 discover = ["cameras/discover", "rtsp"]
 
 [dependencies]
-cameras = { version = "0.2", path = "../cameras" }
+cameras = { version = "0.3", path = "../cameras" }
 egui = "0.34"

@@ -36,6 +36,6 @@ discover = ["cameras/discover", "rtsp"]
 
 [dependencies]
 bytes = "1"
-cameras = { version = "0.2", path = "../cameras" }
+cameras = { version = "0.3", path = "../cameras" }
 dioxus = { version = "0.7", features = ["desktop"] }
 futures-timer = "3"

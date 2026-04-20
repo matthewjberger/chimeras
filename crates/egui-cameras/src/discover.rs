@@ -1,24 +1,65 @@
-//! egui-side glue for `cameras::discover`.
+//! egui-side glue for [`cameras::discover`].
 //!
-//! [`start_discovery`] opens a [`DiscoverySession`]; call [`poll_discovery`]
-//! each frame to drain any newly-arrived events into the session, then pass
-//! it to [`show_discovery`] to render the result list. `show_discovery`
-//! returns `Some(camera)` the frame a row is clicked so the caller can open
-//! it in their existing RTSP viewer.
+//! [`start_discovery`] returns a [`DiscoverySession`]. Call
+//! [`poll_discovery`] on it to drain freshly-arrived events (typically once
+//! per frame; the underlying channel is unbounded so infrequent polling
+//! will not stall the scan). Render results with [`show_discovery`], or
+//! call [`show_discovery_status`] and [`show_discovery_results`] separately
+//! when you want the status line and the result list in different places
+//! in your UI. A click on a result row returns the chosen
+//! [`DiscoveredCamera`] so the caller can pass it to
+//! [`cameras::open_source`]. Dropping the session (or calling
+//! [`cancel_discovery`]) cancels the scan.
+//!
+//! ```no_run
+//! use cameras::discover::DiscoverConfig;
+//! use egui_cameras::{poll_discovery, show_discovery, start_discovery};
+//!
+//! fn ui(ui: &mut egui::Ui, session: &mut Option<egui_cameras::DiscoverySession>) {
+//!     if ui.button("Scan").clicked() {
+//!         let net: ipnet::IpNet = "192.168.1.0/24".parse().unwrap();
+//!         *session = start_discovery(DiscoverConfig {
+//!             subnets: vec![net],
+//!             ..Default::default()
+//!         })
+//!         .ok();
+//!     }
+//!     if let Some(s) = session.as_mut() {
+//!         poll_discovery(s);
+//!         if let Some(cam) = show_discovery(s, ui) {
+//!             let _ = cam;
+//!             // hand `cam.source` to cameras::open_source
+//!         }
+//!     }
+//! }
+//! ```
+
+use std::net::IpAddr;
+
 use cameras::CameraSource;
 use cameras::discover::{
     self, DiscoverConfig, DiscoverEvent, DiscoveredCamera, Discovery, try_next_event,
 };
 use egui::Ui;
 
-/// Live state of a running [`Discovery`] plus the accumulated results,
-/// laid out so a caller can inspect each field without going through a
-/// method. Not an [`egui::Widget`]; pass to [`show_discovery`] instead.
+/// Live state of a running [`Discovery`] plus the accumulated results.
+///
+/// All observable fields are public and plain data: inspect them directly
+/// or pass the session to the `show_*` helpers. Not an [`egui::Widget`] —
+/// pass to [`show_discovery`] instead. The underlying [`Discovery`] is
+/// intentionally private: calling
+/// [`cameras::discover::next_event`](::cameras::discover::next_event) on it
+/// directly would steal events from [`poll_discovery`]'s drain path and
+/// leave the session's fields out of sync with reality.
 pub struct DiscoverySession {
-    /// The underlying scan. Drops (and cancels) with the session.
-    pub inner: Discovery,
+    pub(crate) inner: Discovery,
     /// Cameras confirmed so far, in arrival order.
     pub cameras: Vec<DiscoveredCamera>,
+    /// Hosts that answered RTSP but did not match a known vendor profile,
+    /// each paired with the raw `Server:` header. Useful for diagnosing
+    /// "scan finished, nothing found" — a populated list is a strong
+    /// signal that a vendor clause is missing.
+    pub unmatched_hosts: Vec<(IpAddr, String)>,
     /// Hosts fully probed so far.
     pub scanned: usize,
     /// Hosts the scan intends to visit in total.
@@ -33,21 +74,32 @@ pub fn start_discovery(config: DiscoverConfig) -> Result<DiscoverySession, camer
     Ok(DiscoverySession {
         inner,
         cameras: Vec::new(),
+        unmatched_hosts: Vec::new(),
         scanned: 0,
         total: 0,
         done: false,
     })
 }
 
+/// Cancel the scan and release its runtime. Equivalent to dropping the
+/// session; exposed for symmetry with [`cameras::discover::cancel`] and for
+/// readability at call sites that want to be explicit about intent.
+pub fn cancel_discovery(session: DiscoverySession) {
+    drop(session);
+}
+
 /// Drain every buffered event into the session. Non-blocking. Typically
-/// called once per egui frame. Safe to call infrequently or not at all,
-/// the underlying [`cameras::discover::Discovery`] channel is unbounded so
-/// the scan does not stall on backpressure. Events accumulate until drained
-/// or the session is dropped.
+/// called once per egui frame. Safe to call infrequently or not at all —
+/// the underlying [`Discovery`] channel is unbounded, so the scan does not
+/// stall on backpressure. Events accumulate until drained or the session
+/// is dropped.
 pub fn poll_discovery(session: &mut DiscoverySession) {
     while let Some(event) = try_next_event(&session.inner) {
         match event {
             DiscoverEvent::CameraFound(camera) => session.cameras.push(camera),
+            DiscoverEvent::HostUnmatched { host, server } => {
+                session.unmatched_hosts.push((host, server));
+            }
             DiscoverEvent::Progress { scanned, total } => {
                 session.scanned = scanned;
                 session.total = total;
@@ -56,16 +108,26 @@ pub fn poll_discovery(session: &mut DiscoverySession) {
                 session.done = true;
                 return;
             }
-            DiscoverEvent::HostFound { .. } | DiscoverEvent::HostUnmatched { .. } => {}
+            DiscoverEvent::HostFound { .. } => {}
             _ => {}
         }
     }
 }
 
-/// Render the session into `ui`. Returns `Some(camera)` when the user
-/// clicks a result row, so the caller can hand it to
-/// [`cameras::open_source`].
+/// Render the session's status line and clickable result list into `ui`.
+/// Convenience wrapper over [`show_discovery_status`] +
+/// [`show_discovery_results`] that renders both parts in sequence. Returns
+/// `Some(camera)` when the user clicks a row.
 pub fn show_discovery(session: &DiscoverySession, ui: &mut Ui) -> Option<DiscoveredCamera> {
+    show_discovery_status(session, ui);
+    show_discovery_results(session, ui)
+}
+
+/// Render just the progress / status line ("scanned N/M", "scan finished",
+/// "scanning..."). Call in a different part of your UI than
+/// [`show_discovery_results`] when you want the status separated from the
+/// list.
+pub fn show_discovery_status(session: &DiscoverySession, ui: &mut Ui) {
     if session.total > 0 {
         ui.label(format!(
             "scanned {}/{}",
@@ -77,6 +139,12 @@ pub fn show_discovery(session: &DiscoverySession, ui: &mut Ui) -> Option<Discove
     } else {
         ui.label("scanning...");
     }
+}
+
+/// Render the clickable scrollable result list. Returns `Some(camera)`
+/// when the user clicks a row. Suitable for placing in a side panel or a
+/// collapsing header separate from the status line.
+pub fn show_discovery_results(session: &DiscoverySession, ui: &mut Ui) -> Option<DiscoveredCamera> {
     let mut clicked: Option<DiscoveredCamera> = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, true])

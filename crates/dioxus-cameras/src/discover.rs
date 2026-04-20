@@ -1,3 +1,47 @@
+//! Dioxus hook that drives a [`cameras::discover::Discovery`] and surfaces
+//! its results as Dioxus signals.
+//!
+//! The scan runs on a dedicated worker thread; the UI thread is never
+//! blocked. Events flow through an internal 50ms-tick poll task into the
+//! signals exposed by [`UseDiscovery`].
+//!
+//! ```no_run
+//! use dioxus::prelude::*;
+//! use dioxus_cameras::cameras::discover::DiscoverConfig;
+//! use dioxus_cameras::use_discovery;
+//!
+//! fn DiscoverPanel() -> Element {
+//!     let discovery = use_discovery();
+//!     let running = *discovery.running.read();
+//!     let cameras = discovery.cameras.read().len();
+//!     rsx! {
+//!         button {
+//!             disabled: running,
+//!             onclick: move |_| {
+//!                 let net: ipnet::IpNet = "192.168.1.0/24".parse().unwrap();
+//!                 discovery.start.call(DiscoverConfig {
+//!                     subnets: vec![net],
+//!                     ..Default::default()
+//!                 });
+//!             },
+//!             "Scan"
+//!         }
+//!         button {
+//!             disabled: !running,
+//!             onclick: move |_| discovery.cancel.call(()),
+//!             "Cancel"
+//!         }
+//!         button {
+//!             disabled: running,
+//!             onclick: move |_| discovery.clear.call(()),
+//!             "Clear"
+//!         }
+//!         p { "{cameras} cameras found" }
+//!     }
+//! }
+//! ```
+
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -22,6 +66,11 @@ const WORKER_TICK: Duration = Duration::from_millis(100);
 pub struct UseDiscovery {
     /// Cameras discovered so far, appended in arrival order.
     pub cameras: Signal<Vec<DiscoveredCamera>>,
+    /// Hosts that answered RTSP but did not match a known vendor profile,
+    /// each paired with the raw `Server:` header string. Useful for
+    /// diagnosing "scan finished, nothing found" — a populated list is a
+    /// strong signal that a vendor clause is missing.
+    pub unmatched_hosts: Signal<Vec<(IpAddr, String)>>,
     /// Hosts that have completed probing.
     pub scanned: Signal<usize>,
     /// Total hosts being probed in the current scan.
@@ -34,23 +83,25 @@ pub struct UseDiscovery {
     pub error: Signal<Option<Error>>,
     /// Start a new scan.
     ///
-    /// Ignored while a scan is already running. Resets `cameras`, `scanned`,
-    /// `total`, and `error` at the start of each fresh scan. If
-    /// [`cameras::discover::discover`] returns an error synchronously, the
-    /// error is stored in `error` and `running` stays `false`.
+    /// If a scan is already running, it is cancelled synchronously before
+    /// the new one starts; there is no silent no-op. All result signals
+    /// (`cameras`, `unmatched_hosts`, `scanned`, `total`, `error`) are
+    /// reset at the start of each fresh scan.
     pub start: Callback<DiscoverConfig>,
     /// Cancel the in-flight scan, if any. No-op otherwise.
     pub cancel: Callback<()>,
+    /// Reset all result signals and cancel any in-flight scan. Useful for
+    /// "clear the screen" flows between runs.
+    pub clear: Callback<()>,
 }
 
-/// Hook that drives a [`Discovery`](cameras::discover::Discovery) and
-/// surfaces results as Dioxus signals.
+/// Drive a [`cameras::discover::Discovery`] from a Dioxus component.
 ///
-/// The scan runs on a dedicated worker thread; the UI thread is never
-/// blocked. Clicking `start` on an already-running scan is a no-op, call
-/// `cancel` first to stop it.
+/// See the module-level example and the handle docs on [`UseDiscovery`] for
+/// usage.
 pub fn use_discovery() -> UseDiscovery {
     let mut cameras = use_signal(Vec::<DiscoveredCamera>::new);
+    let mut unmatched_hosts = use_signal(Vec::<(IpAddr, String)>::new);
     let mut scanned = use_signal(|| 0usize);
     let mut total = use_signal(|| 0usize);
     let mut running = use_signal(|| false);
@@ -70,6 +121,9 @@ pub fn use_discovery() -> UseDiscovery {
                         DiscoverEvent::CameraFound(camera) => {
                             cameras.write().push(camera);
                         }
+                        DiscoverEvent::HostUnmatched { host, server } => {
+                            unmatched_hosts.write().push((host, server));
+                        }
                         DiscoverEvent::Progress {
                             scanned: done,
                             total: totals,
@@ -80,7 +134,7 @@ pub fn use_discovery() -> UseDiscovery {
                         DiscoverEvent::Done => {
                             running.set(false);
                         }
-                        DiscoverEvent::HostFound { .. } | DiscoverEvent::HostUnmatched { .. } => {}
+                        DiscoverEvent::HostFound { .. } => {}
                         _ => {}
                     }
                 }
@@ -92,26 +146,37 @@ pub fn use_discovery() -> UseDiscovery {
     let start_handle = Arc::clone(&handle);
     let start_scan_id = Arc::clone(&scan_id);
     let start = use_callback(move |config: DiscoverConfig| {
-        if *running.peek() {
-            return;
+        // Always bump the generation first: any running worker's id is now
+        // stale, and will fail both the forward-event and loop-iteration
+        // checks inside run_discovery. This makes start auto-cancel-and-
+        // restart rather than silently no-op.
+        let id = start_scan_id.fetch_add(1, Ordering::SeqCst) + 1;
+        {
+            let mut guard = start_handle.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.take();
         }
+
         cameras.set(Vec::new());
+        unmatched_hosts.set(Vec::new());
         scanned.set(0);
         total.set(0);
         error.set(None);
+
         let discovery = match discover::discover(config) {
             Ok(discovery) => discovery,
             Err(start_error) => {
                 error.set(Some(start_error));
+                running.set(false);
                 return;
             }
         };
-        let id = start_scan_id.fetch_add(1, Ordering::SeqCst) + 1;
+
         {
             let mut guard = start_handle.lock().unwrap_or_else(PoisonError::into_inner);
             *guard = Some(discovery);
         }
         running.set(true);
+
         let tx = start_tx.clone();
         let handle = Arc::clone(&start_handle);
         let current = Arc::clone(&start_scan_id);
@@ -133,14 +198,32 @@ pub fn use_discovery() -> UseDiscovery {
         running.set(false);
     });
 
+    let clear_handle = Arc::clone(&handle);
+    let clear_scan_id = Arc::clone(&scan_id);
+    let clear = use_callback(move |()| {
+        clear_scan_id.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut guard = clear_handle.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.take();
+        }
+        cameras.set(Vec::new());
+        unmatched_hosts.set(Vec::new());
+        scanned.set(0);
+        total.set(0);
+        error.set(None);
+        running.set(false);
+    });
+
     UseDiscovery {
         cameras,
+        unmatched_hosts,
         scanned,
         total,
         running,
         error,
         start,
         cancel,
+        clear,
     }
 }
 

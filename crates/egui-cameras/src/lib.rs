@@ -44,7 +44,10 @@ mod discover;
     docsrs,
     doc(cfg(all(feature = "discover", any(target_os = "macos", target_os = "windows"))))
 )]
-pub use discover::{DiscoverySession, poll_discovery, show_discovery, start_discovery};
+pub use discover::{
+    DiscoverySession, cancel_discovery, poll_discovery, show_discovery, show_discovery_results,
+    show_discovery_status, start_discovery,
+};
 
 use std::sync::{Arc, Mutex, PoisonError};
 

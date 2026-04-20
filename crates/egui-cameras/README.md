@@ -98,7 +98,11 @@ let frame = capture_frame(&stream.pump);
 
 ## Discovery
 
-With the `discover` feature, `start_discovery(config)` returns a `DiscoverySession`. Call `poll_discovery(&mut session)` each frame and `show_discovery(&session, ui)` to render a clickable result list; a click yields a `DiscoveredCamera` that can be passed to `cameras::open_source`. Configs mix CIDR `subnets` and explicit `host:port` `endpoints`, so port-forwarded tunnels work alongside a LAN scan. `poll_discovery` ignores `DiscoverEvent::HostUnmatched` internally, callers that need to see the raw `Server:` header for debugging should use the lower-level `cameras::discover` API directly. The `apps/egui-demo` Discover panel accepts comma-separated CIDRs and/or `host:port` entries in its Targets field.
+With the `discover` feature, `start_discovery(config)` returns a `DiscoverySession`. Call `poll_discovery(&mut session)` each frame; it is non-blocking and safe to call infrequently (the underlying channel is unbounded). Render results with either the bundled `show_discovery(&session, ui)`, or the split helpers `show_discovery_status` + `show_discovery_results` when you want the status and result list in different UI locations. A click yields a `DiscoveredCamera` that can be passed to `cameras::open_source`. Drop the session (or call `cancel_discovery(session)`) to cancel the scan.
+
+`DiscoverySession`'s observable fields are public: `cameras`, `unmatched_hosts: Vec<(IpAddr, String)>`, `scanned`, `total`, `done`. The underlying `Discovery` handle is intentionally private so callers cannot accidentally steal events from `poll_discovery`'s drain path.
+
+Configs mix CIDR `subnets` and explicit `host:port` `endpoints`, so port-forwarded tunnels work alongside a LAN scan. The `apps/egui-demo` Discover panel accepts comma-separated CIDRs and/or `host:port` entries in its Targets field.
 
 ## Versioning
 

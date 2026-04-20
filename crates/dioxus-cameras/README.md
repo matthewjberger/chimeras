@@ -130,7 +130,20 @@ Enable with `dioxus-cameras = { version = "0.1", features = ["rtsp"] }`.
 
 ## Discovery
 
-With the `discover` feature, `use_discovery()` returns a `UseDiscovery` handle whose `cameras`, `scanned`, `total`, `running`, and `error` signals update as results arrive. Pass a `cameras::discover::DiscoverConfig` to `start.call(config)` to kick off a scan; call `cancel.call(())` to stop early. Configs mix CIDR `subnets` and explicit `host:port` `endpoints` freely, so port-forwarded tunnels alongside a LAN scan work in one pass. Synchronous start failures (invalid subnet, runtime build) land in the `error` signal as a `cameras::Error`. The hook ignores `DiscoverEvent::HostUnmatched` internally, callers that need to see the raw `Server:` header for debugging should use the lower-level `cameras::discover` API directly. The `apps/dioxus-demo` Discover panel accepts comma-separated CIDRs and/or `host:port` entries in its input field and turns any clicked result into a pre-connected stream cell.
+With the `discover` feature, `use_discovery()` returns a `UseDiscovery` handle with the following signals and callbacks:
+
+| Field | Kind | Purpose |
+|------|------|---------|
+| `cameras` | `Signal<Vec<DiscoveredCamera>>` | Confirmed cameras, in arrival order. |
+| `unmatched_hosts` | `Signal<Vec<(IpAddr, String)>>` | Hosts that answered RTSP but whose `Server:` header matched no vendor profile, paired with the raw header. Diagnostic for "scan finished, nothing found". |
+| `scanned` / `total` | `Signal<usize>` | Progress counters. |
+| `running` | `Signal<bool>` | `true` while a scan is in flight. |
+| `error` | `Signal<Option<cameras::Error>>` | Last synchronous `discover::discover` failure. |
+| `start` | `Callback<DiscoverConfig>` | Start a new scan. If a scan is already running, it is cancelled synchronously before the new one starts (no silent no-op). Resets every result signal. |
+| `cancel` | `Callback<()>` | Cancel the in-flight scan. |
+| `clear` | `Callback<()>` | Cancel + reset all result signals. Useful for "clear the screen" flows. |
+
+Configs mix CIDR `subnets` and explicit `host:port` `endpoints` freely, so port-forwarded tunnels alongside a LAN scan work in one pass. The `apps/dioxus-demo` Discover panel accepts comma-separated CIDRs and/or `host:port` entries in its input field and turns any clicked result into a pre-connected stream cell.
 
 ## Source separation
 
