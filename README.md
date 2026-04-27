@@ -44,7 +44,7 @@ just run-egui     # egui / eframe app: single-stream viewer + snapshot
 
 ## Versioning
 
-All three crates ship in lockstep on the same major + minor version (currently `0.1.x`). Use matching minor versions across your `Cargo.toml` when depending on them.
+All three crates ship in lockstep on the same major + minor version. Use matching minor versions across your `Cargo.toml` when depending on them.
 
 ## Publishing
 
